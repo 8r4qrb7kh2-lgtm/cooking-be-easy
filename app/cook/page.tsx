@@ -7,22 +7,42 @@ import { getRecipes } from "@/lib/storage";
 import { getRecentRecipeViews, RecentRecipeViews } from "@/lib/recentViews";
 import { RecipeSortOption, sortRecipes } from "@/lib/recipeSort";
 import { Flame, ChevronRight, Search } from "lucide-react";
+import PageLoadingScreen from "@/components/PageLoadingScreen";
 
 export default function CookSelectPage() {
   const router = useRouter();
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOption, setSortOption] = useState<RecipeSortOption>("recently-viewed");
   const [recentViewsByRecipeId, setRecentViewsByRecipeId] =
     useState<RecentRecipeViews>({});
 
   useEffect(() => {
+    let mounted = true;
+
     async function load() {
-      setRecipes(await getRecipes());
-      setRecentViewsByRecipeId(getRecentRecipeViews());
+      try {
+        const loadedRecipes = await getRecipes();
+
+        if (!mounted) {
+          return;
+        }
+
+        setRecipes(loadedRecipes);
+        setRecentViewsByRecipeId(getRecentRecipeViews());
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
     }
 
     load();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const cookableRecipes = useMemo(
@@ -51,13 +71,18 @@ export default function CookSelectPage() {
         <div>
           <h1 className="text-xl font-bold text-gray-900">Cooking Mode</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            {recipes.length} {recipes.length === 1 ? "recipe" : "recipes"} saved
-            {recipes.length > 0 && ` · showing ${visibleRecipes.length}`}
+            {loading
+              ? "Loading recipes..."
+              : `${recipes.length} ${recipes.length === 1 ? "recipe" : "recipes"} saved${
+                  recipes.length > 0 ? ` · showing ${visibleRecipes.length}` : ""
+                }`}
           </p>
         </div>
       </div>
 
-      {recipes.length === 0 ? (
+      {loading ? (
+        <PageLoadingScreen />
+      ) : recipes.length === 0 ? (
         <div className="text-center py-16">
           <Flame size={48} className="mx-auto text-gray-300 mb-3" />
           <p className="text-gray-500 text-sm">No recipes yet.</p>

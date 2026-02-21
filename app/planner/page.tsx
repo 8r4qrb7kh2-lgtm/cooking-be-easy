@@ -9,10 +9,12 @@ import { RecipeSortOption, sortRecipes } from "@/lib/recipeSort";
 import { mergeIngredients } from "@/lib/utils";
 import { Check, ImageIcon, Search, ShoppingCart } from "lucide-react";
 import Link from "next/link";
+import PageLoadingScreen from "@/components/PageLoadingScreen";
 
 export default function PlannerPage() {
   const router = useRouter();
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOption, setSortOption] = useState<RecipeSortOption>("recently-viewed");
@@ -20,12 +22,34 @@ export default function PlannerPage() {
     useState<RecentRecipeViews>({});
 
   useEffect(() => {
+    let mounted = true;
+
     async function load() {
-      setRecipes(await getRecipes());
-      setSelectedIds(await getWeeklyPlanIds());
-      setRecentViewsByRecipeId(getRecentRecipeViews());
+      try {
+        const [loadedRecipes, loadedSelectedIds] = await Promise.all([
+          getRecipes(),
+          getWeeklyPlanIds(),
+        ]);
+
+        if (!mounted) {
+          return;
+        }
+
+        setRecipes(loadedRecipes);
+        setSelectedIds(loadedSelectedIds);
+        setRecentViewsByRecipeId(getRecentRecipeViews());
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
     }
+
     load();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   async function toggle(id: string) {
@@ -67,11 +91,16 @@ export default function PlannerPage() {
         <h1 className="text-2xl font-bold text-gray-900">Weekly Planner</h1>
       </div>
       <p className="text-sm text-gray-500 mb-6">
-        Select recipes for this week to generate your shopping list.
-        {recipes.length > 0 && ` · showing ${visibleRecipes.length}`}
+        {loading
+          ? "Loading recipes..."
+          : `Select recipes for this week to generate your shopping list.${
+              recipes.length > 0 ? ` · showing ${visibleRecipes.length}` : ""
+            }`}
       </p>
 
-      {recipes.length === 0 ? (
+      {loading ? (
+        <PageLoadingScreen />
+      ) : recipes.length === 0 ? (
         <div className="text-center py-16">
           <p className="text-gray-400 mb-4">No recipes saved yet.</p>
           <Link
