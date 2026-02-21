@@ -1,22 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Recipe } from "@/lib/types";
 import { getRecipes, getWeeklyPlanIds, setWeeklyPlanIds, saveShoppingList } from "@/lib/storage";
+import { getRecentRecipeViews, RecentRecipeViews } from "@/lib/recentViews";
+import { RecipeSortOption, sortRecipes } from "@/lib/recipeSort";
 import { mergeIngredients } from "@/lib/utils";
-import { Check, ImageIcon, ShoppingCart } from "lucide-react";
+import { Check, ImageIcon, Search, ShoppingCart } from "lucide-react";
 import Link from "next/link";
 
 export default function PlannerPage() {
   const router = useRouter();
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortOption, setSortOption] = useState<RecipeSortOption>("recently-viewed");
+  const [recentViewsByRecipeId, setRecentViewsByRecipeId] =
+    useState<RecentRecipeViews>({});
 
   useEffect(() => {
     async function load() {
       setRecipes(await getRecipes());
       setSelectedIds(await getWeeklyPlanIds());
+      setRecentViewsByRecipeId(getRecentRecipeViews());
     }
     load();
   }, []);
@@ -40,6 +47,19 @@ export default function PlannerPage() {
   const totalIngredients = recipes
     .filter((r) => selectedIds.includes(r.id))
     .reduce((sum, r) => sum + r.ingredients.length, 0);
+  const visibleRecipes = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const filtered = query
+      ? recipes.filter((recipe) => {
+          const haystack = `${recipe.name} ${recipe.ingredients
+            .map((ingredient) => ingredient.name)
+            .join(" ")}`.toLowerCase();
+          return haystack.includes(query);
+        })
+      : recipes;
+
+    return sortRecipes(filtered, sortOption, recentViewsByRecipeId);
+  }, [recipes, searchQuery, sortOption, recentViewsByRecipeId]);
 
   return (
     <div>
@@ -48,6 +68,7 @@ export default function PlannerPage() {
       </div>
       <p className="text-sm text-gray-500 mb-6">
         Select recipes for this week to generate your shopping list.
+        {recipes.length > 0 && ` · showing ${visibleRecipes.length}`}
       </p>
 
       {recipes.length === 0 ? (
@@ -62,8 +83,38 @@ export default function PlannerPage() {
         </div>
       ) : (
         <>
+          <div className="mb-5 grid gap-2 sm:grid-cols-[1fr_auto]">
+            <label className="relative">
+              <Search
+                size={16}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+              />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search recipes"
+                className="w-full h-10 pl-9 pr-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+              />
+            </label>
+            <select
+              value={sortOption}
+              onChange={(e) => setSortOption(e.target.value as RecipeSortOption)}
+              className="h-10 text-sm px-3 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+              aria-label="Sort recipes"
+            >
+              <option value="recently-viewed">Recently viewed</option>
+              <option value="rating-desc">Rating: high to low</option>
+            </select>
+          </div>
+
+          {visibleRecipes.length === 0 ? (
+            <div className="text-center py-14">
+              <h2 className="text-lg font-semibold text-gray-500">No matching recipes</h2>
+              <p className="text-sm text-gray-400 mt-1">Try a different search term.</p>
+            </div>
+          ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
-            {recipes.map((recipe) => {
+            {visibleRecipes.map((recipe) => {
               const selected = selectedIds.includes(recipe.id);
               return (
                 <button
@@ -117,6 +168,7 @@ export default function PlannerPage() {
               );
             })}
           </div>
+          )}
 
           {/* Sticky footer */}
           <div className="fixed bottom-16 left-0 right-0 px-4 pb-2 bg-gradient-to-t from-gray-50 pt-4">

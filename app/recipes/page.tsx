@@ -1,16 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Recipe } from "@/lib/types";
 import { getRecipes, deleteRecipe } from "@/lib/storage";
-import { Plus, Trash2, UtensilsCrossed, ImageIcon } from "lucide-react";
+import { getRecentRecipeViews, RecentRecipeViews } from "@/lib/recentViews";
+import { RecipeSortOption, sortRecipes } from "@/lib/recipeSort";
+import { Plus, Trash2, UtensilsCrossed, ImageIcon, Search } from "lucide-react";
 
 export default function RecipesPage() {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortOption, setSortOption] = useState<RecipeSortOption>("recently-viewed");
+  const [recentViewsByRecipeId, setRecentViewsByRecipeId] =
+    useState<RecentRecipeViews>({});
 
   useEffect(() => {
-    getRecipes().then(setRecipes);
+    async function load() {
+      setRecipes(await getRecipes());
+      setRecentViewsByRecipeId(getRecentRecipeViews());
+    }
+
+    load();
   }, []);
 
   async function handleDelete(id: string, name: string) {
@@ -20,6 +31,21 @@ export default function RecipesPage() {
     }
   }
 
+  const visibleRecipes = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    const filtered = query
+      ? recipes.filter((recipe) => {
+          const haystack = `${recipe.name} ${recipe.ingredients
+            .map((ingredient) => ingredient.name)
+            .join(" ")}`.toLowerCase();
+          return haystack.includes(query);
+        })
+      : recipes;
+
+    return sortRecipes(filtered, sortOption, recentViewsByRecipeId);
+  }, [recipes, searchQuery, sortOption, recentViewsByRecipeId]);
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
@@ -27,6 +53,7 @@ export default function RecipesPage() {
           <h1 className="text-2xl font-bold text-gray-900">Recipe Library</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             {recipes.length} {recipes.length === 1 ? "recipe" : "recipes"} saved
+            {recipes.length > 0 && ` · showing ${visibleRecipes.length}`}
           </p>
         </div>
         <Link
@@ -37,6 +64,29 @@ export default function RecipesPage() {
           New
         </Link>
       </div>
+
+      {recipes.length > 0 && (
+        <div className="mb-5 grid gap-2 sm:grid-cols-[1fr_auto]">
+          <label className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search recipes"
+              className="w-full h-10 pl-9 pr-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+            />
+          </label>
+          <select
+            value={sortOption}
+            onChange={(e) => setSortOption(e.target.value as RecipeSortOption)}
+            className="h-10 text-sm px-3 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+            aria-label="Sort recipes"
+          >
+            <option value="recently-viewed">Recently viewed</option>
+            <option value="rating-desc">Rating: high to low</option>
+          </select>
+        </div>
+      )}
 
       {recipes.length === 0 ? (
         <div className="text-center py-20">
@@ -53,9 +103,16 @@ export default function RecipesPage() {
             Add Recipe
           </Link>
         </div>
+      ) : visibleRecipes.length === 0 ? (
+        <div className="text-center py-16">
+          <h2 className="text-lg font-semibold text-gray-500">No matches found</h2>
+          <p className="text-sm text-gray-400 mt-1">
+            Try a different search term.
+          </p>
+        </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-          {recipes.map((recipe) => (
+          {visibleRecipes.map((recipe) => (
             <div key={recipe.id} className="relative group">
               <Link href={`/recipes/${recipe.id}`} className="block">
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">

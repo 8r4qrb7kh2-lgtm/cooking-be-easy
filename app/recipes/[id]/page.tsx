@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Recipe } from "@/lib/types";
 import { getRecipe, saveRecipe } from "@/lib/storage";
+import { markRecipeViewed } from "@/lib/recentViews";
 import IngredientEditor from "@/components/IngredientEditor";
 import Link from "next/link";
 import {
@@ -37,6 +38,7 @@ export default function RecipeDetailPage() {
       }
       setRecipe(r);
       setName(r.name);
+      markRecipeViewed(r.id);
     });
   }, [id, router]);
 

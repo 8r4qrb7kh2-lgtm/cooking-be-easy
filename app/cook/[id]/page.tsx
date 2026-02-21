@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Recipe, Ingredient } from "@/lib/types";
 import { getRecipe } from "@/lib/storage";
+import { markRecipeViewed } from "@/lib/recentViews";
 import {
   ArrowLeft,
   ChevronLeft,
@@ -92,6 +93,11 @@ function formatScaledQuantity(value: number): string {
     .toString()
     .replace(/\.0+$/, "")
     .replace(/(\.\d*[1-9])0+$/, "$1");
+}
+
+function formatServingCount(value: number): string {
+  const formatted = formatScaledQuantity(value);
+  return `${formatted} serving${formatted === "1" ? "" : "s"}`;
 }
 
 function scaleQuantityValue(quantity: string, factor: number): string {
@@ -303,6 +309,7 @@ export default function CookingModePage() {
         return;
       }
       setRecipe(r);
+      markRecipeViewed(r.id);
     });
   }, [id, router]);
 
@@ -387,6 +394,14 @@ export default function CookingModePage() {
   const step = recipeSteps[currentStep] ?? "";
   const nextStep =
     currentStep < totalSteps - 1 ? recipeSteps[currentStep + 1] : null;
+  const ratedServingsYielded =
+    recipe?.servingsYielded && recipe.servingsYielded > 0
+      ? recipe.servingsYielded
+      : null;
+  const scaledServingsYielded =
+    ratedServingsYielded === null
+      ? null
+      : ratedServingsYielded * quantityScale;
 
   const ingredientMatchers = useMemo<IngredientMatcher[]>(
     () =>
@@ -700,6 +715,12 @@ export default function CookingModePage() {
                     Reset
                   </button>
                 </div>
+                {ratedServingsYielded !== null && scaledServingsYielded !== null && (
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    Rated yield: {formatServingCount(ratedServingsYielded)} -&gt;{" "}
+                    {formatServingCount(scaledServingsYielded)}
+                  </p>
+                )}
               </div>
             </div>
 

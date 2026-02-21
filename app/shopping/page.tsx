@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
+  Recipe,
   ShoppingListItem,
   GrocerySection,
   GROCERY_SECTIONS,
 } from "@/lib/types";
-import { getShoppingList, saveShoppingList } from "@/lib/storage";
+import { getRecipes, getShoppingList, saveShoppingList } from "@/lib/storage";
+import { getRecentRecipeViews, RecentRecipeViews } from "@/lib/recentViews";
+import { RecipeSortOption } from "@/lib/recipeSort";
 import { groupBySection } from "@/lib/utils";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -20,6 +23,7 @@ import {
   X,
   ChevronDown,
   ChevronRight,
+  Search,
 } from "lucide-react";
 
 export default function ShoppingPage() {
@@ -30,9 +34,26 @@ export default function ShoppingPage() {
   const [editBuf, setEditBuf] = useState({ quantity: "", unit: "", name: "" });
   const [addingSection, setAddingSection] = useState<GrocerySection | null>(null);
   const [newItem, setNewItem] = useState({ name: "", quantity: "", unit: "" });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortOption, setSortOption] = useState<RecipeSortOption>("recently-viewed");
+  const [recentViewsByRecipeId, setRecentViewsByRecipeId] =
+    useState<RecentRecipeViews>({});
+  const [recipesById, setRecipesById] = useState<Record<string, Recipe>>({});
 
   useEffect(() => {
-    getShoppingList().then(setItems);
+    async function load() {
+      const [shoppingItems, recipes] = await Promise.all([
+        getShoppingList(),
+        getRecipes(),
+      ]);
+      setItems(shoppingItems);
+      setRecipesById(
+        Object.fromEntries(recipes.map((recipe) => [recipe.id, recipe]))
+      );
+      setRecentViewsByRecipeId(getRecentRecipeViews());
+    }
+
+    load();
   }, []);
 
   async function persist(next: ShoppingListItem[]) {
@@ -92,9 +113,55 @@ export default function ShoppingPage() {
     persist(items.filter((item) => !item.checked));
   }
 
-  const grouped = groupBySection(items);
+  function getSortMetricsForItem(item: ShoppingListItem) {
+    let recentViewedAt = 0;
+    let ratingScore = 0;
+
+    for (const recipeId of item.recipeIds) {
+      const recipe = recipesById[recipeId];
+      if (!recipe) continue;
+      recentViewedAt = Math.max(recentViewedAt, recentViewsByRecipeId[recipeId] ?? 0);
+      ratingScore = Math.max(ratingScore, recipe.rating ?? 0);
+    }
+
+    return { recentViewedAt, ratingScore };
+  }
+
+  const visibleItems = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const filtered = query
+      ? items.filter((item) => {
+          const haystack = `${item.name} ${item.recipeNames.join(" ")}`.toLowerCase();
+          return haystack.includes(query);
+        })
+      : items;
+
+    return [...filtered].sort((a, b) => {
+      const aMetrics = getSortMetricsForItem(a);
+      const bMetrics = getSortMetricsForItem(b);
+
+      if (sortOption === "rating-desc") {
+        const ratingDiff = bMetrics.ratingScore - aMetrics.ratingScore;
+        if (ratingDiff !== 0) return ratingDiff;
+
+        const recentDiff = bMetrics.recentViewedAt - aMetrics.recentViewedAt;
+        if (recentDiff !== 0) return recentDiff;
+      } else {
+        const recentDiff = bMetrics.recentViewedAt - aMetrics.recentViewedAt;
+        if (recentDiff !== 0) return recentDiff;
+
+        const ratingDiff = bMetrics.ratingScore - aMetrics.ratingScore;
+        if (ratingDiff !== 0) return ratingDiff;
+      }
+
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+  }, [items, recentViewsByRecipeId, recipesById, searchQuery, sortOption]);
+
+  const grouped = groupBySection(visibleItems);
   const checkedCount = items.filter((i) => i.checked).length;
   const totalCount = items.length;
+  const visibleCount = visibleItems.length;
   const activeSections = GROCERY_SECTIONS.filter((s) => grouped[s].length > 0);
 
   if (items.length === 0) {
@@ -117,6 +184,7 @@ export default function ShoppingPage() {
           <h1 className="text-2xl font-bold text-gray-900">Shopping List</h1>
           <p className="text-sm text-gray-500 mt-0.5">
             {checkedCount}/{totalCount} items checked
+            {` · showing ${visibleCount}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -152,6 +220,27 @@ export default function ShoppingPage() {
         </div>
       </div>
 
+      <div className="mb-5 grid gap-2 sm:grid-cols-[1fr_auto]">
+        <label className="relative">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search shopping items"
+            className="w-full h-10 pl-9 pr-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+          />
+        </label>
+        <select
+          value={sortOption}
+          onChange={(e) => setSortOption(e.target.value as RecipeSortOption)}
+          className="h-10 text-sm px-3 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+          aria-label="Sort shopping items"
+        >
+          <option value="recently-viewed">Recently viewed</option>
+          <option value="rating-desc">Rating: high to low</option>
+        </select>
+      </div>
+
       {/* Progress bar */}
       {checklistMode && totalCount > 0 && (
         <div className="mb-5 bg-gray-100 rounded-full h-2 overflow-hidden">
@@ -162,48 +251,55 @@ export default function ShoppingPage() {
         </div>
       )}
 
-      {/* Sections */}
-      <div className="space-y-4">
-        {activeSections.map((section) => {
-          const sectionItems = grouped[section];
-          const collapsed = collapsedSections.has(section);
-          const sectionChecked = sectionItems.filter((i) => i.checked).length;
+      {visibleItems.length === 0 ? (
+        <div className="text-center py-14">
+          <h2 className="text-lg font-semibold text-gray-500">No matching items</h2>
+          <p className="text-sm text-gray-400 mt-1">Try a different search term.</p>
+        </div>
+      ) : (
+        <>
+          {/* Sections */}
+          <div className="space-y-4">
+            {activeSections.map((section) => {
+              const sectionItems = grouped[section];
+              const collapsed = collapsedSections.has(section);
+              const sectionChecked = sectionItems.filter((i) => i.checked).length;
 
-          return (
-            <div key={section} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              {/* Section header */}
-              <button
-                className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
-                onClick={() => toggleSection(section)}
-              >
-                <div className="flex items-center gap-2">
-                  {collapsed ? (
-                    <ChevronRight size={16} className="text-gray-400" />
-                  ) : (
-                    <ChevronDown size={16} className="text-gray-400" />
-                  )}
-                  <span className="font-semibold text-gray-800 text-sm">{section}</span>
-                  <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
-                    {sectionItems.length}
-                  </span>
-                </div>
-                {checklistMode && sectionChecked > 0 && (
-                  <span className="text-xs text-brand-600 font-medium">
-                    {sectionChecked}/{sectionItems.length}
-                  </span>
-                )}
-              </button>
+              return (
+                <div key={section} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                  {/* Section header */}
+                  <button
+                    className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
+                    onClick={() => toggleSection(section)}
+                  >
+                    <div className="flex items-center gap-2">
+                      {collapsed ? (
+                        <ChevronRight size={16} className="text-gray-400" />
+                      ) : (
+                        <ChevronDown size={16} className="text-gray-400" />
+                      )}
+                      <span className="font-semibold text-gray-800 text-sm">{section}</span>
+                      <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+                        {sectionItems.length}
+                      </span>
+                    </div>
+                    {checklistMode && sectionChecked > 0 && (
+                      <span className="text-xs text-brand-600 font-medium">
+                        {sectionChecked}/{sectionItems.length}
+                      </span>
+                    )}
+                  </button>
 
-              {/* Items */}
-              {!collapsed && (
-                <ul className="divide-y divide-gray-50">
-                  {sectionItems.map((item) => (
-                    <li
-                      key={item.id}
-                      className={`px-4 py-3 flex items-center gap-3 transition-colors ${
-                        item.checked ? "bg-gray-50" : ""
-                      }`}
-                    >
+                  {/* Items */}
+                  {!collapsed && (
+                    <ul className="divide-y divide-gray-50">
+                      {sectionItems.map((item) => (
+                        <li
+                          key={item.id}
+                          className={`px-4 py-3 flex items-center gap-3 transition-colors ${
+                            item.checked ? "bg-gray-50" : ""
+                          }`}
+                        >
                       {/* Checkbox in checklist mode */}
                       {checklistMode && (
                         <button
@@ -298,69 +394,71 @@ export default function ShoppingPage() {
                           <X size={14} />
                         </button>
                       )}
-                    </li>
-                  ))}
+                        </li>
+                      ))}
 
-                  {/* Add item row */}
-                  {!checklistMode && (
-                    <>
-                      {addingSection === section ? (
-                        <li className="px-4 py-2 flex gap-2 items-center bg-brand-50">
-                          <input
-                            autoFocus
-                            className="w-16 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                            value={newItem.quantity}
-                            onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
-                            placeholder="Qty"
-                          />
-                          <input
-                            className="w-20 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                            value={newItem.unit}
-                            onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
-                            placeholder="Unit"
-                          />
-                          <input
-                            className="flex-1 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                            value={newItem.name}
-                            onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
-                            placeholder="Item name"
-                            onKeyDown={(e) => e.key === "Enter" && addItemToSection(section)}
-                          />
-                          <button
-                            onClick={() => addItemToSection(section)}
-                            className="text-brand-600 hover:text-brand-700"
-                          >
-                            <Check size={16} />
-                          </button>
-                          <button
-                            onClick={() => setAddingSection(null)}
-                            className="text-gray-400"
-                          >
-                            <X size={16} />
-                          </button>
-                        </li>
-                      ) : (
-                        <li>
-                          <button
-                            onClick={() => {
-                              setAddingSection(section);
-                              setNewItem({ name: "", quantity: "", unit: "" });
-                            }}
-                            className="w-full px-4 py-2 flex items-center gap-2 text-sm text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
-                          >
-                            <Plus size={14} />
-                            Add item
-                          </button>
-                        </li>
+                      {/* Add item row */}
+                      {!checklistMode && (
+                        <>
+                          {addingSection === section ? (
+                            <li className="px-4 py-2 flex gap-2 items-center bg-brand-50">
+                              <input
+                                autoFocus
+                                className="w-16 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
+                                value={newItem.quantity}
+                                onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
+                                placeholder="Qty"
+                              />
+                              <input
+                                className="w-20 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
+                                value={newItem.unit}
+                                onChange={(e) => setNewItem({ ...newItem, unit: e.target.value })}
+                                placeholder="Unit"
+                              />
+                              <input
+                                className="flex-1 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
+                                value={newItem.name}
+                                onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+                                placeholder="Item name"
+                                onKeyDown={(e) => e.key === "Enter" && addItemToSection(section)}
+                              />
+                              <button
+                                onClick={() => addItemToSection(section)}
+                                className="text-brand-600 hover:text-brand-700"
+                              >
+                                <Check size={16} />
+                              </button>
+                              <button
+                                onClick={() => setAddingSection(null)}
+                                className="text-gray-400"
+                              >
+                                <X size={16} />
+                              </button>
+                            </li>
+                          ) : (
+                            <li>
+                              <button
+                                onClick={() => {
+                                  setAddingSection(section);
+                                  setNewItem({ name: "", quantity: "", unit: "" });
+                                }}
+                                className="w-full px-4 py-2 flex items-center gap-2 text-sm text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+                              >
+                                <Plus size={14} />
+                                Add item
+                              </button>
+                            </li>
+                          )}
+                        </>
                       )}
-                    </>
+                    </ul>
                   )}
-                </ul>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
