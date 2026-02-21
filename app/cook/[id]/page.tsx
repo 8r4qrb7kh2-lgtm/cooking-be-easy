@@ -697,7 +697,7 @@ export default function CookingModePage() {
                   </button>
                   <button
                     onClick={() => applyQuantityScale("divide")}
-                    className="text-xs px-2.5 py-1 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors"
+                    className="text-xs px-2.5 py-1 rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
                   >
                     Divide
                   </button>

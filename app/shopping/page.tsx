@@ -113,6 +113,11 @@ export default function ShoppingPage() {
     persist(items.filter((item) => !item.checked));
   }
 
+  function clearAll() {
+    if (!confirm("Clear all shopping items?")) return;
+    persist([]);
+  }
+
   function getSortMetricsForItem(item: ShoppingListItem) {
     let recentViewedAt = 0;
     let ratingScore = 0;
@@ -188,6 +193,15 @@ export default function ShoppingPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {totalCount > 0 && (
+            <button
+              onClick={clearAll}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
+            >
+              <Trash2 size={13} />
+              Clear all
+            </button>
+          )}
           {checkedCount > 0 && (
             <button
               onClick={clearChecked}
