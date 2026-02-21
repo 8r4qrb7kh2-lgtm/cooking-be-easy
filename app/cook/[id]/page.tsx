@@ -26,6 +26,9 @@ interface IngredientMatcher {
   patterns: string[];
 }
 
+const STEP_INGREDIENT_MAPPING_CACHE_KEY_PREFIX =
+  "cooking-be-easy-step-ingredient-map";
+
 const UNICODE_FRACTIONS: Record<string, string> = {
   "\u00BC": "1/4",
   "\u00BD": "1/2",
@@ -301,6 +304,9 @@ export default function CookingModePage() {
   const [showResetIngredientFocus, setShowResetIngredientFocus] = useState(false);
   const [quantityScaleInput, setQuantityScaleInput] = useState("2");
   const [quantityScale, setQuantityScale] = useState(1);
+  const [aiFirstStepByIngredientId, setAiFirstStepByIngredientId] = useState<
+    Record<string, number> | null
+  >(null);
 
   useEffect(() => {
     getRecipe(id).then((r) => {
@@ -403,6 +409,105 @@ export default function CookingModePage() {
       ? null
       : ratedServingsYielded * quantityScale;
 
+  useEffect(() => {
+    if (!recipe) return;
+
+    const ingredientsPayload = recipe.ingredients.map((ingredient) => ({
+      id: ingredient.id,
+      name: ingredient.name,
+      quantity: ingredient.quantity,
+      unit: ingredient.unit,
+    }));
+    const stepsPayload = recipe.steps;
+
+    if (ingredientsPayload.length === 0 || stepsPayload.length === 0) {
+      setAiFirstStepByIngredientId({});
+      return;
+    }
+
+    const cacheKey = `${STEP_INGREDIENT_MAPPING_CACHE_KEY_PREFIX}:${recipe.id}:${recipe.updatedAt}`;
+    setAiFirstStepByIngredientId(null);
+
+    if (typeof window !== "undefined") {
+      const cached = window.localStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached) as Record<string, unknown>;
+          const validCached: Record<string, number> = {};
+
+          for (const ingredient of ingredientsPayload) {
+            const value = parsed[ingredient.id];
+            if (
+              typeof value === "number" &&
+              Number.isInteger(value) &&
+              value >= 0 &&
+              value < stepsPayload.length
+            ) {
+              validCached[ingredient.id] = value;
+            }
+          }
+
+          setAiFirstStepByIngredientId(validCached);
+          return;
+        } catch {
+          // ignore invalid cache and fetch a fresh mapping
+        }
+      }
+    }
+
+    let cancelled = false;
+
+    async function mapWithAi() {
+      try {
+        const res = await fetch("/api/map-step-ingredients", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ingredients: ingredientsPayload,
+            steps: stepsPayload,
+          }),
+        });
+        if (!res.ok) throw new Error("Failed to map ingredients to steps");
+
+        const data = await res.json();
+        const source =
+          data && typeof data === "object" && data.firstStepByIngredientId
+            ? (data.firstStepByIngredientId as Record<string, unknown>)
+            : {};
+
+        const validMapping: Record<string, number> = {};
+        for (const ingredient of ingredientsPayload) {
+          const value = source[ingredient.id];
+          if (
+            typeof value === "number" &&
+            Number.isInteger(value) &&
+            value >= 0 &&
+            value < stepsPayload.length
+          ) {
+            validMapping[ingredient.id] = value;
+          }
+        }
+
+        if (cancelled) return;
+
+        setAiFirstStepByIngredientId(validMapping);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(cacheKey, JSON.stringify(validMapping));
+        }
+      } catch {
+        if (!cancelled) {
+          setAiFirstStepByIngredientId(null);
+        }
+      }
+    }
+
+    mapWithAi();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recipe]);
+
   const ingredientMatchers = useMemo<IngredientMatcher[]>(
     () =>
       recipeIngredients.map((ingredient) => ({
@@ -412,7 +517,7 @@ export default function CookingModePage() {
     [recipeIngredients]
   );
 
-  const firstMentionStepById = useMemo(() => {
+  const firstMentionStepByTextMatch = useMemo(() => {
     const firstMention = new Map<string, number>();
     for (const matcher of ingredientMatchers) {
       if (matcher.patterns.length === 0) continue;
@@ -425,6 +530,38 @@ export default function CookingModePage() {
     }
     return firstMention;
   }, [ingredientMatchers, recipeSteps]);
+
+  const firstMentionStepById = useMemo(() => {
+    if (!aiFirstStepByIngredientId) {
+      return firstMentionStepByTextMatch;
+    }
+
+    const firstMention = new Map<string, number>();
+    for (const ingredient of recipeIngredients) {
+      const aiStep = aiFirstStepByIngredientId[ingredient.id];
+      if (
+        typeof aiStep === "number" &&
+        Number.isInteger(aiStep) &&
+        aiStep >= 0 &&
+        aiStep < totalSteps
+      ) {
+        firstMention.set(ingredient.id, aiStep);
+        continue;
+      }
+
+      const fallbackStep = firstMentionStepByTextMatch.get(ingredient.id);
+      if (fallbackStep !== undefined) {
+        firstMention.set(ingredient.id, fallbackStep);
+      }
+    }
+
+    return firstMention;
+  }, [
+    aiFirstStepByIngredientId,
+    firstMentionStepByTextMatch,
+    recipeIngredients,
+    totalSteps,
+  ]);
 
   const ingredientsByFirstMentionStep = useMemo(() => {
     const grouped = new Map<number, Ingredient[]>();
