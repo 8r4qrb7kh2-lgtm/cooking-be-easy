@@ -16,6 +16,7 @@ import { Ingredient, Recipe } from "@/lib/types";
 import { getRecipe } from "@/lib/storage";
 import { markRecipeViewed } from "@/lib/recentViews";
 import { addGlobalTimer, extractTimerPresets, TimerPreset } from "@/lib/globalTimers";
+import GlobalTimerTray from "@/components/GlobalTimerTray";
 import {
   buildIngredientMatchers,
   findStepIngredientCitations,
@@ -60,7 +61,6 @@ type NavigatorWithWakeLock = Navigator & {
 
 const STEP_INGREDIENT_MAPPING_CACHE_KEY_PREFIX =
   "cooking-be-easy-step-ingredient-map";
-const AUTO_STEP_TIMER_CACHE_KEY = "cooking-be-easy-auto-step-timers";
 
 export default function CookingModePage() {
   const { id } = useParams<{ id: string }>();
@@ -89,9 +89,6 @@ export default function CookingModePage() {
   const [keepScreenAwake, setKeepScreenAwake] = useState(false);
   const [wakeLockError, setWakeLockError] = useState<string | null>(null);
 
-  const autoStepTimerKeysRef = useRef<Set<string>>(new Set());
-  const [autoStepTimerKeysReady, setAutoStepTimerKeysReady] = useState(false);
-
   useEffect(() => {
     getRecipe(id).then((r) => {
       if (!r || !r.steps || r.steps.length === 0) {
@@ -102,35 +99,6 @@ export default function CookingModePage() {
       markRecipeViewed(r.id);
     });
   }, [id, router]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const cached = window.localStorage.getItem(AUTO_STEP_TIMER_CACHE_KEY);
-    if (!cached) {
-      setAutoStepTimerKeysReady(true);
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(cached);
-      if (Array.isArray(parsed)) {
-        autoStepTimerKeysRef.current = new Set(
-          parsed.filter((value): value is string => typeof value === "string")
-        );
-      }
-    } catch {
-      // ignore corrupted cache
-    }
-
-    setAutoStepTimerKeysReady(true);
-  }, []);
-
-  const persistAutoStepTimerKeys = useCallback(() => {
-    if (typeof window === "undefined") return;
-    const trimmed = Array.from(autoStepTimerKeysRef.current).slice(-600);
-    window.localStorage.setItem(AUTO_STEP_TIMER_CACHE_KEY, JSON.stringify(trimmed));
-  }, []);
 
   async function handleConvert(ingredient: Ingredient, targetUnit: string) {
     if (!targetUnit.trim() || !ingredient.quantity || !ingredient.unit) return;
@@ -556,44 +524,6 @@ export default function CookingModePage() {
     [step]
   );
 
-  useEffect(() => {
-    if (
-      !autoStepTimerKeysReady ||
-      !recipe ||
-      currentStepTimerPresets.length === 0
-    ) {
-      return;
-    }
-
-    let changed = false;
-
-    currentStepTimerPresets.forEach((preset) => {
-      const key = `${recipe.id}:${currentStep}:${preset.durationSeconds}:${preset.sourceText.toLowerCase()}`;
-      if (autoStepTimerKeysRef.current.has(key)) {
-        return;
-      }
-
-      addGlobalTimer({
-        label: `${recipe.name} · Step ${currentStep + 1} (${preset.label})`,
-        durationSeconds: preset.durationSeconds,
-        recipeId: recipe.id,
-        stepNumber: currentStep + 1,
-      });
-      autoStepTimerKeysRef.current.add(key);
-      changed = true;
-    });
-
-    if (changed) {
-      persistAutoStepTimerKeys();
-    }
-  }, [
-    autoStepTimerKeysReady,
-    currentStep,
-    currentStepTimerPresets,
-    persistAutoStepTimerKeys,
-    recipe,
-  ]);
-
   function startTimerFromPreset(preset: TimerPreset) {
     if (!recipe) return;
     addGlobalTimer({
@@ -851,7 +781,7 @@ export default function CookingModePage() {
           <span className="inline-flex items-center rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs text-brand-700">
             <Clock3 size={12} className="mr-1.5" />
             {currentStepTimerPresets.length} timer
-            {currentStepTimerPresets.length === 1 ? "" : "s"} auto-added
+            {currentStepTimerPresets.length === 1 ? "" : "s"} ready
           </span>
         )}
       </div>
@@ -859,6 +789,29 @@ export default function CookingModePage() {
       {wakeLockError && (
         <p className="text-xs text-red-600 mb-4">{wakeLockError}</p>
       )}
+
+      {currentStepTimerPresets.length > 0 && (
+        <div className="mb-6 rounded-2xl border border-brand-200 bg-brand-50/70 p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-brand-700 mb-2">
+            Timers for this step
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {currentStepTimerPresets.map((preset, index) => (
+              <button
+                key={`${preset.label}-${preset.durationSeconds}-${index}`}
+                type="button"
+                onClick={() => startTimerFromPreset(preset)}
+                className="inline-flex items-center gap-2 rounded-lg border border-brand-300 bg-white px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-100 transition-colors"
+              >
+                <Clock3 size={14} />
+                Start {preset.label} timer
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <GlobalTimerTray className="mb-6" />
 
       <div className="flex flex-col lg:flex-row gap-6">
         <div className="flex-1">
@@ -869,27 +822,6 @@ export default function CookingModePage() {
               </span>
               <p className="text-gray-800 text-lg leading-relaxed pt-1">{highlightedStep}</p>
             </div>
-
-            {currentStepTimerPresets.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-gray-100">
-                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-                  Timers in this step
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {currentStepTimerPresets.map((preset, index) => (
-                    <button
-                      key={`${preset.label}-${preset.durationSeconds}-${index}`}
-                      type="button"
-                      onClick={() => startTimerFromPreset(preset)}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100 transition-colors"
-                    >
-                      <Clock3 size={12} />
-                      Add {preset.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
           {nextStep && (

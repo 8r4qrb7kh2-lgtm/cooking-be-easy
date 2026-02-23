@@ -3,11 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Bell,
-  Clock3,
   Plus,
   TimerReset,
   Trash2,
-  X,
 } from "lucide-react";
 import {
   GlobalTimer,
@@ -28,6 +26,10 @@ interface ToastAlert {
   createdAt: number;
 }
 
+interface Props {
+  className?: string;
+}
+
 function formatRemaining(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -42,10 +44,9 @@ function formatRemaining(seconds: number): string {
   return `${secs}s`;
 }
 
-export default function GlobalTimerTray() {
+export default function GlobalTimerTray({ className = "" }: Props) {
   const [timers, setTimers] = useState<GlobalTimer[]>([]);
   const [now, setNow] = useState(Date.now());
-  const [open, setOpen] = useState(false);
   const [customLabel, setCustomLabel] = useState("");
   const [minutesInput, setMinutesInput] = useState("5");
   const [toasts, setToasts] = useState<ToastAlert[]>([]);
@@ -177,157 +178,133 @@ export default function GlobalTimerTray() {
 
   return (
     <>
-      <div className="fixed right-4 bottom-24 z-40">
-        <button
-          type="button"
-          onClick={() => setOpen((value) => !value)}
-          className="rounded-full bg-brand-600 text-white px-4 py-2.5 shadow-lg hover:bg-brand-700 transition-colors flex items-center gap-2"
-          aria-label="Toggle timers"
-        >
-          <Clock3 size={16} />
-          <span className="text-sm font-semibold">Timers</span>
-          {activeCount > 0 && (
-            <span className="text-xs rounded-full bg-white/20 px-2 py-0.5">
-              {activeCount}
-            </span>
-          )}
-        </button>
-        {nearestRemaining !== null && !open && (
-          <p className="text-[11px] text-right mt-1 text-gray-500 font-medium">
-            Next: {formatRemaining(nearestRemaining)}
+      <section
+        className={`rounded-2xl border border-gray-200 bg-white shadow-sm ${className}`}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <h3 className="text-sm font-semibold text-gray-900">Global Timers</h3>
+          <div className="text-right">
+            <p className="text-xs text-gray-500 font-medium">{activeCount} active</p>
+            {nearestRemaining !== null && (
+              <p className="text-sm text-brand-700 font-semibold tabular-nums">
+                Next: {formatRemaining(nearestRemaining)}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
+          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+            Add timer
           </p>
-        )}
-      </div>
-
-      {open && (
-        <div className="fixed right-4 bottom-40 z-50 w-[calc(100vw-2rem)] max-w-sm rounded-2xl border border-gray-200 bg-white shadow-xl">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-900">Global Timers</h3>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="text-gray-400 hover:text-gray-600"
-              aria-label="Close timers"
-            >
-              <X size={16} />
-            </button>
-          </div>
-
-          <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
-            <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-              Add timer
-            </p>
-            <div className="grid grid-cols-[1fr_auto] gap-2">
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <input
+              value={customLabel}
+              onChange={(e) => setCustomLabel(e.target.value)}
+              placeholder="Label (optional)"
+              className="w-full px-2.5 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+            />
+            <div className="flex items-center gap-1">
               <input
-                value={customLabel}
-                onChange={(e) => setCustomLabel(e.target.value)}
-                placeholder="Label (optional)"
-                className="w-full px-2.5 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+                value={minutesInput}
+                onChange={(e) => setMinutesInput(e.target.value)}
+                type="number"
+                min="0.1"
+                step="0.1"
+                className="w-16 px-2 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
               />
-              <div className="flex items-center gap-1">
-                <input
-                  value={minutesInput}
-                  onChange={(e) => setMinutesInput(e.target.value)}
-                  type="number"
-                  min="0.1"
-                  step="0.1"
-                  className="w-16 px-2 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
-                />
-                <span className="text-xs text-gray-500">min</span>
-              </div>
+              <span className="text-xs text-gray-500">min</span>
             </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleAddCustomTimer}
+            className="w-full text-xs font-semibold rounded-lg bg-brand-600 text-white py-2 hover:bg-brand-700 transition-colors flex items-center justify-center gap-1.5"
+          >
+            <Plus size={13} />
+            Start timer
+          </button>
+          {notificationPermission === "default" && (
             <button
               type="button"
-              onClick={handleAddCustomTimer}
-              className="w-full text-xs font-semibold rounded-lg bg-brand-600 text-white py-2 hover:bg-brand-700 transition-colors flex items-center justify-center gap-1.5"
+              onClick={enableNotifications}
+              className="w-full text-xs rounded-lg border border-brand-200 bg-brand-50 text-brand-700 py-2 hover:bg-brand-100 transition-colors flex items-center justify-center gap-1.5"
             >
-              <Plus size={13} />
-              Start timer
+              <Bell size={13} />
+              Enable browser notifications
             </button>
-            {notificationPermission === "default" && (
-              <button
-                type="button"
-                onClick={enableNotifications}
-                className="w-full text-xs rounded-lg border border-brand-200 bg-brand-50 text-brand-700 py-2 hover:bg-brand-100 transition-colors flex items-center justify-center gap-1.5"
-              >
-                <Bell size={13} />
-                Enable browser notifications
-              </button>
-            )}
-          </div>
-
-          <div className="max-h-72 overflow-y-auto px-4 py-3">
-            {timers.length === 0 ? (
-              <p className="text-xs text-gray-500">No active timers yet.</p>
-            ) : (
-              <ul className="space-y-2">
-                {timers.map((timer) => {
-                  const remaining = getTimerRemainingSeconds(timer, now);
-                  const complete = Boolean(timer.completedAt);
-                  return (
-                    <li
-                      key={timer.id}
-                      className={`rounded-lg border px-3 py-2 ${
-                        complete
-                          ? "border-brand-200 bg-brand-50"
-                          : "border-gray-200 bg-white"
-                      }`}
-                    >
-                      <div className="flex items-start gap-2">
-                        <div className="flex-1 min-w-0">
-                          <p
-                            className={`text-xs font-medium leading-tight ${
-                              complete ? "text-brand-800" : "text-gray-800"
-                            }`}
-                          >
-                            {timer.label}
-                          </p>
-                          <p
-                            className={`text-[11px] mt-0.5 ${
-                              complete ? "text-brand-700" : "text-gray-500"
-                            }`}
-                          >
-                            {complete
-                              ? "Done"
-                              : `${formatRemaining(remaining)} remaining`}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            removeGlobalTimer(timer.id);
-                            setTimers(loadGlobalTimers());
-                          }}
-                          className="text-gray-400 hover:text-gray-600"
-                          title="Remove timer"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-
-          {timers.some((timer) => timer.completedAt) && (
-            <div className="px-4 py-3 border-t border-gray-100">
-              <button
-                type="button"
-                onClick={() => {
-                  clearCompletedGlobalTimers();
-                  setTimers(loadGlobalTimers());
-                }}
-                className="w-full text-xs py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors flex items-center justify-center gap-1.5"
-              >
-                <TimerReset size={13} />
-                Clear completed
-              </button>
-            </div>
           )}
         </div>
-      )}
+
+        <div className="max-h-80 overflow-y-auto px-4 py-3">
+          {timers.length === 0 ? (
+            <p className="text-xs text-gray-500">No active timers yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {timers.map((timer) => {
+                const remaining = getTimerRemainingSeconds(timer, now);
+                const complete = Boolean(timer.completedAt);
+                return (
+                  <li
+                    key={timer.id}
+                    className={`rounded-lg border px-3 py-2 ${
+                      complete
+                        ? "border-brand-200 bg-brand-50"
+                        : "border-gray-200 bg-white"
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <p
+                          className={`text-xs font-medium leading-tight ${
+                            complete ? "text-brand-800" : "text-gray-800"
+                          }`}
+                        >
+                          {timer.label}
+                        </p>
+                        {complete ? (
+                          <p className="text-sm mt-1 text-brand-700 font-medium">Done</p>
+                        ) : (
+                          <p className="mt-1 text-2xl leading-none font-bold text-brand-700 tabular-nums">
+                            {formatRemaining(remaining)}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          removeGlobalTimer(timer.id);
+                          setTimers(loadGlobalTimers());
+                        }}
+                        className="text-gray-400 hover:text-gray-600"
+                        title="Remove timer"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        {timers.some((timer) => timer.completedAt) && (
+          <div className="px-4 py-3 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={() => {
+                clearCompletedGlobalTimers();
+                setTimers(loadGlobalTimers());
+              }}
+              className="w-full text-xs py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors flex items-center justify-center gap-1.5"
+            >
+              <TimerReset size={13} />
+              Clear completed
+            </button>
+          </div>
+        )}
+      </section>
 
       <div className="fixed top-24 right-4 z-[60] space-y-2 pointer-events-none">
         {toasts.slice(-3).map((toast) => (
