@@ -15,8 +15,8 @@ import Link from "next/link";
 import { Ingredient, Recipe } from "@/lib/types";
 import { getRecipe } from "@/lib/storage";
 import { markRecipeViewed } from "@/lib/recentViews";
-import { addGlobalTimer, extractTimerPresets, TimerPreset } from "@/lib/globalTimers";
-import GlobalTimerTray from "@/components/GlobalTimerTray";
+import { extractTimerPresets } from "@/lib/globalTimers";
+import GlobalTimerTray, { SuggestedTimer } from "@/components/GlobalTimerTray";
 import {
   buildIngredientMatchers,
   findStepIngredientCitations,
@@ -61,6 +61,115 @@ type NavigatorWithWakeLock = Navigator & {
 
 const STEP_INGREDIENT_MAPPING_CACHE_KEY_PREFIX =
   "cooking-be-easy-step-ingredient-map";
+
+const STEP_TIMER_ACTION_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /\bcarameli[sz](?:e|ed|ing)?\b/i, label: "caramelize" },
+  { pattern: /\bbrown(?:ed|ing)?\b/i, label: "brown" },
+  { pattern: /\bsimmer(?:ed|ing)?\b/i, label: "simmer" },
+  { pattern: /\bboil(?:ed|ing)?\b/i, label: "boil" },
+  { pattern: /\btoast(?:ed|ing)?\b/i, label: "toast" },
+  { pattern: /\broast(?:ed|ing)?\b/i, label: "roast" },
+  { pattern: /\bbake(?:d|ing)?\b/i, label: "bake" },
+  { pattern: /\bsear(?:ed|ing)?\b/i, label: "sear" },
+  { pattern: /\bgrill(?:ed|ing)?\b/i, label: "grill" },
+  { pattern: /\bfry(?:ing|ied)?\b/i, label: "fry" },
+  { pattern: /\bsteam(?:ed|ing)?\b/i, label: "steam" },
+  { pattern: /\bmelt(?:ed|ing)?\b/i, label: "melt" },
+  { pattern: /\breduc(?:e|ed|ing)\b/i, label: "reduce" },
+  { pattern: /\brest(?:ed|ing)?\b/i, label: "rest" },
+  { pattern: /\bchill(?:ed|ing)?\b/i, label: "chill" },
+  { pattern: /\bcook(?:ed|ing)?\b/i, label: "cook" },
+];
+
+const INGREDIENT_DESCRIPTOR_WORDS = new Set([
+  "large",
+  "small",
+  "medium",
+  "fresh",
+  "white",
+  "yellow",
+  "red",
+  "green",
+  "whole",
+  "chopped",
+  "diced",
+  "minced",
+  "optional",
+]);
+
+function simplifyIngredientName(name: string): string {
+  const cleaned = name
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) return "";
+
+  const words = cleaned.split(" ").filter(Boolean);
+  const withoutDescriptors = words.filter(
+    (word) => !INGREDIENT_DESCRIPTOR_WORDS.has(word)
+  );
+  const source = withoutDescriptors.length > 0 ? withoutDescriptors : words;
+
+  if (source.length > 2 && source[source.length - 1].endsWith("s")) {
+    return source[source.length - 1];
+  }
+
+  return source.slice(-2).join(" ");
+}
+
+function buildStepTimerTitle(
+  stepText: string,
+  citations: StepIngredientCitation[],
+  ingredientById: Map<string, Ingredient>
+): string {
+  let action = "";
+  for (const candidate of STEP_TIMER_ACTION_PATTERNS) {
+    if (candidate.pattern.test(stepText)) {
+      action = candidate.label;
+      break;
+    }
+  }
+
+  let target = "";
+  for (const citation of citations) {
+    const ingredient = ingredientById.get(citation.ingredientId);
+    if (!ingredient) continue;
+    const simplified = simplifyIngredientName(ingredient.name);
+    if (simplified) {
+      target = simplified;
+      break;
+    }
+  }
+
+  let label = "";
+  if (action && target) {
+    label = `${action} ${target}`;
+  } else if (target) {
+    label = target;
+  } else if (action) {
+    label = action;
+  } else {
+    const fallback = stepText
+      .replace(/\([^)]*\)/g, " ")
+      .replace(
+        /\b\d+(?:\.\d+)?\s*(?:-|to)?\s*\d*(?:\.\d+)?\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\b/gi,
+        " "
+      )
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase()
+      .split(/[.;,]/)[0]
+      .trim();
+    label = fallback.split(" ").slice(0, 4).join(" ");
+  }
+
+  const normalized = label.replace(/\s+/g, " ").trim();
+  if (!normalized) return "step timer";
+  return normalized.slice(0, 40);
+}
 
 export default function CookingModePage() {
   const { id } = useParams<{ id: string }>();
@@ -524,15 +633,26 @@ export default function CookingModePage() {
     [step]
   );
 
-  function startTimerFromPreset(preset: TimerPreset) {
-    if (!recipe) return;
-    addGlobalTimer({
-      label: `${recipe.name} · Step ${currentStep + 1} (${preset.label})`,
+  const suggestedStepTimers = useMemo<SuggestedTimer[]>(() => {
+    if (!recipe || currentStepTimerPresets.length === 0) return [];
+
+    const title = buildStepTimerTitle(step, currentStepCitations, ingredientById);
+    return currentStepTimerPresets.map((preset, index) => ({
+      id: `${recipe.id}-${currentStep}-${index}-${preset.durationSeconds}`,
+      buttonLabel: preset.label,
       durationSeconds: preset.durationSeconds,
+      title,
       recipeId: recipe.id,
       stepNumber: currentStep + 1,
-    });
-  }
+    }));
+  }, [
+    currentStep,
+    currentStepCitations,
+    currentStepTimerPresets,
+    ingredientById,
+    recipe,
+    step,
+  ]);
 
   function renderIngredientItem(ing: Ingredient, key: string, textClass: string) {
     const converted = conversions[ing.id];
@@ -790,28 +910,7 @@ export default function CookingModePage() {
         <p className="text-xs text-red-600 mb-4">{wakeLockError}</p>
       )}
 
-      {currentStepTimerPresets.length > 0 && (
-        <div className="mb-6 rounded-2xl border border-brand-200 bg-brand-50/70 p-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-brand-700 mb-2">
-            Timers for this step
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {currentStepTimerPresets.map((preset, index) => (
-              <button
-                key={`${preset.label}-${preset.durationSeconds}-${index}`}
-                type="button"
-                onClick={() => startTimerFromPreset(preset)}
-                className="inline-flex items-center gap-2 rounded-lg border border-brand-300 bg-white px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-brand-100 transition-colors"
-              >
-                <Clock3 size={14} />
-                Start {preset.label} timer
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <GlobalTimerTray className="mb-6" />
+      <GlobalTimerTray className="mb-6" suggestedTimers={suggestedStepTimers} />
 
       <div className="flex flex-col lg:flex-row gap-6">
         <div className="flex-1">

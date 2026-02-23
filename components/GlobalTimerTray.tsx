@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Bell,
+  Clock3,
   Plus,
   TimerReset,
   Trash2,
@@ -26,8 +27,18 @@ interface ToastAlert {
   createdAt: number;
 }
 
+export interface SuggestedTimer {
+  id: string;
+  buttonLabel: string;
+  durationSeconds: number;
+  title: string;
+  recipeId?: string;
+  stepNumber?: number;
+}
+
 interface Props {
   className?: string;
+  suggestedTimers?: SuggestedTimer[];
 }
 
 function formatRemaining(seconds: number): string {
@@ -44,7 +55,10 @@ function formatRemaining(seconds: number): string {
   return `${secs}s`;
 }
 
-export default function GlobalTimerTray({ className = "" }: Props) {
+export default function GlobalTimerTray({
+  className = "",
+  suggestedTimers = [],
+}: Props) {
   const [timers, setTimers] = useState<GlobalTimer[]>([]);
   const [now, setNow] = useState(Date.now());
   const [customLabel, setCustomLabel] = useState("");
@@ -176,6 +190,16 @@ export default function GlobalTimerTray({ className = "" }: Props) {
     setCustomLabel("");
   }
 
+  function handleStartSuggestedTimer(timer: SuggestedTimer) {
+    addGlobalTimer({
+      label: timer.title,
+      durationSeconds: timer.durationSeconds,
+      recipeId: timer.recipeId,
+      stepNumber: timer.stepNumber,
+    });
+    setTimers(loadGlobalTimers());
+  }
+
   return (
     <>
       <section
@@ -193,42 +217,52 @@ export default function GlobalTimerTray({ className = "" }: Props) {
           </div>
         </div>
 
-        <div className="px-4 py-3 border-b border-gray-100 space-y-2.5">
-          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
-            Add timer
-          </p>
-          <div className="grid grid-cols-[1fr_auto] gap-2">
+        <div className="px-3 py-2 border-b border-gray-100 space-y-2">
+          {suggestedTimers.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {suggestedTimers.map((timer) => (
+                <button
+                  key={timer.id}
+                  type="button"
+                  onClick={() => handleStartSuggestedTimer(timer)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-100 transition-colors"
+                >
+                  <Clock3 size={11} />
+                  Start {timer.buttonLabel}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="grid grid-cols-[minmax(0,1fr)_4.5rem_auto] gap-1.5 items-center">
             <input
               value={customLabel}
               onChange={(e) => setCustomLabel(e.target.value)}
               placeholder="Label (optional)"
-              className="w-full px-2.5 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+              className="w-full h-8 px-2.5 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
             />
-            <div className="flex items-center gap-1">
-              <input
-                value={minutesInput}
-                onChange={(e) => setMinutesInput(e.target.value)}
-                type="number"
-                min="0.1"
-                step="0.1"
-                className="w-16 px-2 py-2 text-xs border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
-              />
-              <span className="text-xs text-gray-500">min</span>
-            </div>
+            <input
+              value={minutesInput}
+              onChange={(e) => setMinutesInput(e.target.value)}
+              type="number"
+              min="0.1"
+              step="0.1"
+              className="w-full h-8 px-2 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500"
+            />
+            <button
+              type="button"
+              onClick={handleAddCustomTimer}
+              className="h-8 px-3 text-xs font-semibold rounded-md bg-brand-600 text-white hover:bg-brand-700 transition-colors flex items-center justify-center gap-1.5 whitespace-nowrap"
+            >
+              <Plus size={12} />
+              Start
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={handleAddCustomTimer}
-            className="w-full text-xs font-semibold rounded-lg bg-brand-600 text-white py-2 hover:bg-brand-700 transition-colors flex items-center justify-center gap-1.5"
-          >
-            <Plus size={13} />
-            Start timer
-          </button>
           {notificationPermission === "default" && (
             <button
               type="button"
               onClick={enableNotifications}
-              className="w-full text-xs rounded-lg border border-brand-200 bg-brand-50 text-brand-700 py-2 hover:bg-brand-100 transition-colors flex items-center justify-center gap-1.5"
+              className="w-full text-[11px] rounded-md border border-brand-200 bg-brand-50 text-brand-700 py-1.5 hover:bg-brand-100 transition-colors flex items-center justify-center gap-1.5"
             >
               <Bell size={13} />
               Enable browser notifications
