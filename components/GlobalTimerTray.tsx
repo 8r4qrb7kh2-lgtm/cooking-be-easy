@@ -82,6 +82,18 @@ export default function GlobalTimerTray({
     return minRemaining;
   }, [timers, now]);
 
+  const visibleSuggestedTimers = useMemo(() => {
+    return suggestedTimers.filter(
+      (suggested) =>
+        !timers.some(
+          (timer) =>
+            !timer.completedAt &&
+            timer.label === suggested.title &&
+            timer.durationSeconds === suggested.durationSeconds
+        )
+    );
+  }, [suggestedTimers, timers]);
+
   useEffect(() => {
     const refresh = () => {
       setTimers(loadGlobalTimers());
@@ -218,22 +230,6 @@ export default function GlobalTimerTray({
         </div>
 
         <div className="px-3 py-2 border-b border-gray-100 space-y-2">
-          {suggestedTimers.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {suggestedTimers.map((timer) => (
-                <button
-                  key={timer.id}
-                  type="button"
-                  onClick={() => handleStartSuggestedTimer(timer)}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-100 transition-colors"
-                >
-                  <Clock3 size={11} />
-                  Start {timer.buttonLabel}
-                </button>
-              ))}
-            </div>
-          )}
-
           <div className="grid grid-cols-[minmax(0,1fr)_4.5rem_auto] gap-1.5 items-center">
             <input
               value={customLabel}
@@ -271,10 +267,35 @@ export default function GlobalTimerTray({
         </div>
 
         <div className="max-h-80 overflow-y-auto px-4 py-3">
-          {timers.length === 0 ? (
+          {timers.length === 0 && visibleSuggestedTimers.length === 0 ? (
             <p className="text-xs text-gray-500">No active timers yet.</p>
           ) : (
             <ul className="space-y-2">
+              {visibleSuggestedTimers.map((timer) => (
+                <li
+                  key={`suggested-${timer.id}`}
+                  className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2"
+                >
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium leading-tight text-brand-900">
+                        {timer.title}
+                      </p>
+                      <p className="text-[11px] mt-0.5 text-brand-700">
+                        Suggested: {timer.buttonLabel}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleStartSuggestedTimer(timer)}
+                      className="h-7 px-2.5 rounded-md bg-brand-600 text-white text-xs font-semibold hover:bg-brand-700 transition-colors inline-flex items-center gap-1"
+                    >
+                      <Clock3 size={11} />
+                      Start
+                    </button>
+                  </div>
+                </li>
+              ))}
               {timers.map((timer) => {
                 const remaining = getTimerRemainingSeconds(timer, now);
                 const complete = Boolean(timer.completedAt);
