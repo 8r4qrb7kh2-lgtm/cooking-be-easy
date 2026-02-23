@@ -29,7 +29,12 @@ export async function POST(request: NextRequest) {
 Convert: ${quantity} ${fromUnit} of "${ingredientName}" to ${toUnit}
 
 Important:
-- If converting between volume and mass (e.g., cups to grams), use the correct density for "${ingredientName}" specifically. Different ingredients have very different densities (e.g., 1 cup of flour ≈ 125g, but 1 cup of sugar ≈ 200g, 1 cup of butter ≈ 227g).
+- Highest priority: physical accuracy of the conversion, especially density.
+- If converting between volume and mass (e.g., cups to grams), you MUST use a real-world culinary density for "${ingredientName}" specifically, and for the ingredient's form/state if present in the name (e.g., grated, shredded, chopped, packed, sifted, melted, fresh).
+- Do NOT use a generic/default density from a different ingredient. Never substitute flour/sugar/butter-style defaults unless the ingredient is actually that ingredient.
+- Use only density values you are confident are realistic for this ingredient in normal cooking contexts.
+- If details are missing, infer the most common culinary form for "${ingredientName}" and use a realistic density for that form.
+- Ensure the final number is internally consistent with that density and the unit definitions.
 - Round to a reasonable precision for cooking (no more than 2 decimal places).
 - Support all common cooking units: tsp, tbsp, cup, fl oz, mL, L, pint, quart, gallon, g, kg, oz, lb.
 
