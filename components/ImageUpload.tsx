@@ -42,14 +42,13 @@ export default function ImageUpload({ onImage, label = "Upload photo", accept = 
         <Upload size={28} />
       </div>
       <p className="text-sm font-medium text-gray-600">{label}</p>
-      <p className="text-xs text-gray-400">Tap or drag & drop</p>
+      <p className="text-xs text-gray-400">Camera or files · tap or drag & drop</p>
       <input
         ref={inputRef}
         type="file"
         accept={accept}
         className="hidden"
         onChange={handleChange}
-        capture="environment"
       />
     </div>
   );

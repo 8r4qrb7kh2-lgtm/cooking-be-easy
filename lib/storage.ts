@@ -1,5 +1,6 @@
 import { Recipe, ShoppingListItem } from "./types";
 import { getSupabase } from "./supabase";
+import { normalizeRecipeSteps } from "./recipeSteps";
 
 function parseOptionalNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -30,6 +31,35 @@ async function getHouseholdId(): Promise<string | null> {
   return data?.household_id ?? null;
 }
 
+function mapRecipeRow(row: any): {
+  recipe: Recipe;
+  normalizedStepsChanged: boolean;
+} {
+  const rawSteps = Array.isArray(row.steps) ? row.steps : [];
+  const originalSteps = rawSteps.filter((step: unknown): step is string => typeof step === "string");
+  const normalizedSteps = normalizeRecipeSteps(originalSteps);
+  const normalizedStepsChanged =
+    normalizedSteps.length !== originalSteps.length ||
+    normalizedSteps.some((step, index) => step !== originalSteps[index]);
+
+  return {
+    recipe: {
+      id: row.id,
+      name: row.name,
+      ingredients: row.ingredients as Recipe["ingredients"],
+      steps: normalizedSteps,
+      rating: parseOptionalNumber(row.rating),
+      servingsYielded: parseOptionalNumber(row.servings_yielded),
+      dishPhotos: row.dish_photos || [],
+      ingredientPhoto: row.ingredient_photo || undefined,
+      sourceUrl: row.source_url || undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    },
+    normalizedStepsChanged,
+  };
+}
+
 export async function getRecipes(): Promise<Recipe[]> {
   const supabase = getSupabase();
   // RLS handles filtering: returns own recipes + household members' recipes
@@ -40,19 +70,33 @@ export async function getRecipes(): Promise<Recipe[]> {
 
   if (error) throw error;
 
-  return (data || []).map((row) => ({
-    id: row.id,
-    name: row.name,
-    ingredients: row.ingredients as Recipe["ingredients"],
-    steps: row.steps as string[],
-    rating: parseOptionalNumber(row.rating),
-    servingsYielded: parseOptionalNumber(row.servings_yielded),
-    dishPhotos: row.dish_photos || [],
-    ingredientPhoto: row.ingredient_photo || undefined,
-    sourceUrl: row.source_url || undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }));
+  const mapped = (data || []).map((row) => mapRecipeRow(row));
+
+  const normalizeWrites = mapped
+    .filter((item) => item.normalizedStepsChanged)
+    .map((item) =>
+      supabase
+        .from("recipes")
+        .update({
+          steps: item.recipe.steps,
+          updated_at: item.recipe.updatedAt,
+        })
+        .eq("id", item.recipe.id)
+    );
+
+  if (normalizeWrites.length > 0) {
+    await Promise.all(
+      normalizeWrites.map(async (write) => {
+        try {
+          await write;
+        } catch {
+          // ignore best-effort normalization failures
+        }
+      })
+    );
+  }
+
+  return mapped.map((item) => item.recipe);
 }
 
 export async function getRecipe(id: string): Promise<Recipe | undefined> {
@@ -65,30 +109,30 @@ export async function getRecipe(id: string): Promise<Recipe | undefined> {
 
   if (error || !data) return undefined;
 
-  return {
-    id: data.id,
-    name: data.name,
-    ingredients: data.ingredients as Recipe["ingredients"],
-    steps: data.steps as string[],
-    rating: parseOptionalNumber(data.rating),
-    servingsYielded: parseOptionalNumber(data.servings_yielded),
-    dishPhotos: data.dish_photos || [],
-    ingredientPhoto: data.ingredient_photo || undefined,
-    sourceUrl: data.source_url || undefined,
-    createdAt: data.created_at,
-    updatedAt: data.updated_at,
-  };
+  const mapped = mapRecipeRow(data);
+  if (mapped.normalizedStepsChanged) {
+    await supabase
+      .from("recipes")
+      .update({
+        steps: mapped.recipe.steps,
+        updated_at: mapped.recipe.updatedAt,
+      })
+      .eq("id", mapped.recipe.id);
+  }
+
+  return mapped.recipe;
 }
 
 export async function saveRecipe(recipe: Recipe): Promise<void> {
   const supabase = getSupabase();
   const userId = await getUserId();
+  const normalizedSteps = normalizeRecipeSteps(recipe.steps);
   const { error } = await supabase.from("recipes").upsert({
     id: recipe.id,
     user_id: userId,
     name: recipe.name,
     ingredients: recipe.ingredients,
-    steps: recipe.steps,
+    steps: normalizedSteps,
     rating: recipe.rating ?? null,
     servings_yielded: recipe.servingsYielded ?? null,
     dish_photos: recipe.dishPhotos,

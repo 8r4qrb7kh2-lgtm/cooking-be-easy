@@ -18,6 +18,8 @@ import {
   Link2,
   ListOrdered,
   Star,
+  Flame,
+  CalendarDays,
 } from "lucide-react";
 
 export default function RecipeDetailPage() {
@@ -131,6 +133,22 @@ export default function RecipeDetailPage() {
               Source
             </a>
           )}
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Link
+              href={`/cook/${recipe.id}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-700 hover:bg-brand-100 transition-colors"
+            >
+              <Flame size={12} />
+              Cooking mode
+            </Link>
+            <Link
+              href={`/planner?add=${recipe.id}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              <CalendarDays size={12} />
+              Add to planner
+            </Link>
+          </div>
         </div>
         {dirty && (
           <button
@@ -178,7 +196,6 @@ export default function RecipeDetailPage() {
             <input
               type="file"
               accept="image/*"
-              capture="environment"
               className="hidden"
               onChange={async (e) => {
                 const file = e.target.files?.[0];

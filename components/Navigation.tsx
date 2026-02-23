@@ -23,7 +23,7 @@ export default function Navigation() {
   return (
     <>
       {/* Top header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
+      <header className="surface border-b surface-border sticky top-0 z-50">
         <div className="max-w-4xl mx-auto px-4 h-32 flex items-center gap-3">
           <GooseChefLogo variant="header" size={176} />
           <div className="flex-1" />
@@ -50,7 +50,7 @@ export default function Navigation() {
       </header>
 
       {/* Bottom tab bar */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50">
+      <nav className="fixed bottom-0 left-0 right-0 surface border-t surface-border z-50">
         <div className="max-w-4xl mx-auto flex">
           {navItems.map(({ href, label, icon: Icon }) => {
             const active = pathname === href || pathname.startsWith(href + "/");

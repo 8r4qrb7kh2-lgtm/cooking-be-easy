@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
+import { normalizeRecipeSteps } from "@/lib/recipeSteps";
 
 const client = new Anthropic();
 
@@ -58,7 +59,7 @@ Return ONLY valid JSON (no markdown, no explanation) in exactly this format:
       "section": "exact section name from the list above"
     }
   ],
-  "steps": ["Step 1 instruction", "Step 2 instruction"]
+  "steps": ["instruction 1", "instruction 2"]
 }
 
 If you cannot identify any ingredients, use an empty array for "ingredients".
@@ -80,7 +81,7 @@ If you cannot identify any steps/instructions, use an empty array for "steps".`,
     const parsed = JSON.parse(jsonMatch[0]);
     return NextResponse.json({
       ingredients: parsed.ingredients || [],
-      steps: parsed.steps || [],
+      steps: normalizeRecipeSteps(parsed.steps || []),
     });
   } catch (error) {
     console.error("Analyze ingredients error:", error);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Recipe } from "@/lib/types";
 import { getRecipes, getWeeklyPlanIds, setWeeklyPlanIds, saveShoppingList } from "@/lib/storage";
 import { getRecentRecipeViews, RecentRecipeViews } from "@/lib/recentViews";
@@ -13,6 +13,7 @@ import PageLoadingScreen from "@/components/PageLoadingScreen";
 
 export default function PlannerPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -51,6 +52,21 @@ export default function PlannerPage() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    const addId = searchParams.get("add");
+    if (!addId || recipes.length === 0 || selectedIds.includes(addId)) {
+      return;
+    }
+    if (!recipes.some((recipe) => recipe.id === addId)) {
+      return;
+    }
+
+    const next = [...selectedIds, addId];
+    setSelectedIds(next);
+    void setWeeklyPlanIds(next);
+    router.replace("/planner");
+  }, [recipes, router, searchParams, selectedIds]);
 
   async function toggle(id: string) {
     const next = selectedIds.includes(id)
@@ -200,7 +216,7 @@ export default function PlannerPage() {
           )}
 
           {/* Sticky footer */}
-          <div className="fixed bottom-16 left-0 right-0 px-4 pb-2 bg-gradient-to-t from-gray-50 pt-4">
+          <div className="fixed bottom-16 left-0 right-0 px-4 pb-2 bg-gradient-to-t from-[var(--background)] pt-4">
             <div className="max-w-4xl mx-auto">
               <button
                 onClick={buildList}

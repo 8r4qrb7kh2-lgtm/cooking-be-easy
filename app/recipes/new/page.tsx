@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Ingredient, GrocerySection } from "@/lib/types";
 import { saveRecipe } from "@/lib/storage";
+import { normalizeRecipeSteps } from "@/lib/recipeSteps";
 import ImageUpload from "@/components/ImageUpload";
 import IngredientEditor from "@/components/IngredientEditor";
 import { v4 as uuidv4 } from "uuid";
@@ -50,7 +51,7 @@ export default function NewRecipePage() {
           })
         )
       );
-      setSteps(data.steps || []);
+      setSteps(normalizeRecipeSteps(data.steps || []));
       setStep("review");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to analyze image");
@@ -84,7 +85,7 @@ export default function NewRecipePage() {
           })
         )
       );
-      setSteps(data.steps || []);
+      setSteps(normalizeRecipeSteps(data.steps || []));
       setSourceUrl(urlInput.trim());
       setStep("review");
     } catch (e) {
@@ -233,7 +234,7 @@ export default function NewRecipePage() {
           {sourceMode === "photo" && (
             <div className="space-y-3">
               <p className="text-sm text-gray-600">
-                Take or upload a photo of the ingredient list. Claude AI will extract the ingredients.
+                Use your camera or choose a file of the ingredient list. Claude AI will extract the ingredients.
               </p>
               {analyzing ? (
                 <div className="flex items-center justify-center gap-2 py-10 text-brand-700 font-medium">

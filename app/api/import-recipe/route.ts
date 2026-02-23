@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest, NextResponse } from "next/server";
+import { normalizeRecipeSteps } from "@/lib/recipeSteps";
 
 const client = new Anthropic();
 
@@ -107,8 +108,8 @@ export async function POST(request: NextRequest) {
     }
   ],
   "steps": [
-    "Step 1: ...",
-    "Step 2: ..."
+    "...",
+    "..."
   ]
 }
 
@@ -137,7 +138,10 @@ ${pageText}`,
       return NextResponse.json({ error: parsed.error }, { status: 422 });
     }
 
-    return NextResponse.json(parsed);
+    return NextResponse.json({
+      ...parsed,
+      steps: normalizeRecipeSteps(parsed.steps || []),
+    });
   } catch (error) {
     console.error("Import recipe error:", error);
     return NextResponse.json(
