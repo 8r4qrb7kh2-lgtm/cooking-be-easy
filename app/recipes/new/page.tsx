@@ -24,6 +24,7 @@ export default function NewRecipePage() {
   const [sourceUrl, setSourceUrl] = useState<string | undefined>();
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [steps, setSteps] = useState<string[]>([]);
+  const [notes, setNotes] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState("");
 
@@ -101,6 +102,7 @@ export default function NewRecipePage() {
       name: name.trim(),
       ingredients,
       steps,
+      notes,
       dishPhotos: [],
       ingredientPhoto: photo || undefined,
       sourceUrl,
@@ -336,6 +338,19 @@ export default function NewRecipePage() {
               </a>
             </p>
           )}
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Notes
+            </label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Add any notes for this recipe"
+              rows={4}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-brand-500 resize-y"
+            />
+          </div>
 
           <button
             onClick={save}

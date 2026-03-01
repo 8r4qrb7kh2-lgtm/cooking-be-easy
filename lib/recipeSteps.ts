@@ -31,6 +31,74 @@ const UNICODE_FRACTIONS: Record<string, string> = {
 const TEXTUAL_QUANTITY_PATTERN =
   /(?:\bone\b|\btwo\b|\bthree\b|\bfour\b|\bfive\b|\bsix\b|\bseven\b|\beight\b|\bnine\b|\bten\b|\bhalf\b|\bquarter\b|\ban\b|\ba\b)/i;
 
+const INGREDIENT_DESCRIPTOR_WORDS = new Set([
+  "fresh",
+  "dried",
+  "ground",
+  "crushed",
+  "chopped",
+  "diced",
+  "minced",
+  "large",
+  "small",
+  "medium",
+  "optional",
+  "boneless",
+  "skinless",
+  "ripe",
+  "warm",
+  "cold",
+  "unsalted",
+  "salted",
+  "extra",
+  "extra-virgin",
+]);
+
+const GENERIC_TRAILING_INGREDIENT_WORDS = new Set([
+  "clove",
+  "cloves",
+  "leaf",
+  "leaves",
+  "sprig",
+  "sprigs",
+  "bunch",
+  "bunches",
+  "piece",
+  "pieces",
+  "slice",
+  "slices",
+  "stalk",
+  "stalks",
+  "head",
+  "heads",
+  "fillet",
+  "fillets",
+  "breast",
+  "breasts",
+  "thigh",
+  "thighs",
+  "rib",
+  "ribs",
+  "cube",
+  "cubes",
+  "strip",
+  "strips",
+  "link",
+  "links",
+  "can",
+  "cans",
+  "jar",
+  "jars",
+  "package",
+  "packages",
+  "bag",
+  "bags",
+  "block",
+  "blocks",
+  "stick",
+  "sticks",
+]);
+
 export function normalizeRecipeStep(step: string): string {
   return step
     .replace(/\s+/g, " ")
@@ -214,6 +282,28 @@ export function buildIngredientPatterns(name: string): string[] {
   } else {
     for (const form of getWordForms(words[0])) {
       addPhrase(form);
+    }
+  }
+
+  const coreWords = words.filter((word) => !INGREDIENT_DESCRIPTOR_WORDS.has(word));
+  if (coreWords.length > 1) {
+    addPhrase(coreWords.join(" "));
+
+    const trailing = coreWords[coreWords.length - 1];
+    if (GENERIC_TRAILING_INGREDIENT_WORDS.has(trailing)) {
+      const coreAlias = coreWords.slice(0, -1).join(" ");
+      addPhrase(coreAlias);
+
+      const aliasWords = coreAlias.split(" ").filter(Boolean);
+      if (aliasWords.length > 0) {
+        for (const form of getWordForms(aliasWords[aliasWords.length - 1])) {
+          if (aliasWords.length === 1) {
+            addPhrase(form);
+          } else {
+            addPhrase(`${aliasWords.slice(0, -1).join(" ")} ${form}`);
+          }
+        }
+      }
     }
   }
 

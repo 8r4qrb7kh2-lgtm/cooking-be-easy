@@ -24,7 +24,7 @@ export default function Navigation() {
     <>
       {/* Top header */}
       <header className="surface border-b surface-border sticky top-0 z-50">
-        <div className="max-w-4xl mx-auto px-4 h-32 flex items-center gap-3">
+        <div className="max-w-4xl mx-auto px-4 h-28 sm:h-32 flex items-center gap-2 sm:gap-3 min-w-0">
           <GooseChefLogo variant="header" size={176} />
           <div className="flex-1" />
           {user && (
@@ -42,7 +42,7 @@ export default function Navigation() {
                 title="Sign out"
               >
                 <LogOut size={14} />
-                Sign out
+                <span className="hidden sm:inline">Sign out</span>
               </button>
             </>
           )}

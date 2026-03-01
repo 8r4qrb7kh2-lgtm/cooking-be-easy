@@ -28,6 +28,7 @@ export interface Recipe {
   name: string;
   ingredients: Ingredient[];
   steps: string[];
+  notes: string;
   rating?: number; // 1-5 stars
   servingsYielded?: number; // actual servings this recipe produced
   dishPhotos: string[]; // base64 data URLs

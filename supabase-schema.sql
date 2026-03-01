@@ -34,6 +34,7 @@ create table recipes (
   name text not null,
   ingredients jsonb not null default '[]',
   steps jsonb not null default '[]',
+  notes text not null default '',
   rating int check (rating between 1 and 5),
   servings_yielded numeric(6,2),
   dish_photos text[] not null default '{}',

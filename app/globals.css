@@ -10,6 +10,12 @@
   --muted: #5f6b5e;
 }
 
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);

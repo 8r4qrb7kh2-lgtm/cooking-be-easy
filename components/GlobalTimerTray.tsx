@@ -138,27 +138,39 @@ export default function GlobalTimerTray({
 
     const completedAt = Date.now();
     for (const timer of dueTimers) {
-      markGlobalTimerCompleted(timer.id, completedAt);
-      setToasts((prev) => [
-        ...prev,
-        {
-          id: `${timer.id}-${completedAt}`,
-          label: timer.label,
-          createdAt: completedAt,
-        },
-      ]);
+      try {
+        markGlobalTimerCompleted(timer.id, completedAt);
+        setToasts((prev) => [
+          ...prev,
+          {
+            id: `${timer.id}-${completedAt}`,
+            label: timer.label,
+            createdAt: completedAt,
+          },
+        ]);
+      } catch {
+        // keep timer UI resilient even if storage/event APIs fail
+      }
 
       if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
-        navigator.vibrate([120, 40, 120]);
+        try {
+          navigator.vibrate([120, 40, 120]);
+        } catch {
+          // vibration support is best-effort only
+        }
       }
 
       if (typeof Notification !== "undefined") {
-        if (Notification.permission === "granted") {
-          new Notification("Cooking timer done", {
-            body: timer.label,
-            tag: `cooking-be-easy-${timer.id}`,
-          });
-          markGlobalTimerNotified(timer.id, completedAt);
+        try {
+          if (Notification.permission === "granted") {
+            new Notification("Cooking timer done", {
+              body: timer.label,
+              tag: `cooking-be-easy-${timer.id}`,
+            });
+            markGlobalTimerNotified(timer.id, completedAt);
+          }
+        } catch {
+          // notifications can throw on some mobile browsers/PWAs
         }
       }
     }
