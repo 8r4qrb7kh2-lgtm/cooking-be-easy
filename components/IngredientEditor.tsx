@@ -4,12 +4,23 @@ import { Ingredient, GROCERY_SECTIONS, GrocerySection } from "@/lib/types";
 import { Trash2, Plus } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 
+export interface IngredientEditorMeta {
+  label: string;
+  detail?: string;
+  href?: string;
+}
+
 interface Props {
   ingredients: Ingredient[];
   onChange: (ingredients: Ingredient[]) => void;
+  metaByIngredientId?: Record<string, IngredientEditorMeta>;
 }
 
-export default function IngredientEditor({ ingredients, onChange }: Props) {
+export default function IngredientEditor({
+  ingredients,
+  onChange,
+  metaByIngredientId,
+}: Props) {
   function update(id: string, field: keyof Ingredient, value: string) {
     onChange(
       ingredients.map((ing) =>
@@ -72,6 +83,29 @@ export default function IngredientEditor({ ingredients, onChange }: Props) {
                 </option>
               ))}
             </select>
+            {metaByIngredientId?.[ing.id] && (
+              <div className="col-span-2 rounded-lg border border-gray-100 bg-gray-50 px-2.5 py-2">
+                <p className="text-xs font-medium text-gray-800">
+                  {metaByIngredientId[ing.id].label}
+                </p>
+                {metaByIngredientId[ing.id].detail && (
+                  metaByIngredientId[ing.id].href ? (
+                    <a
+                      href={metaByIngredientId[ing.id].href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-1 block text-[11px] leading-4 text-brand-700 hover:underline"
+                    >
+                      {metaByIngredientId[ing.id].detail}
+                    </a>
+                  ) : (
+                    <p className="mt-1 text-[11px] leading-4 text-gray-500">
+                      {metaByIngredientId[ing.id].detail}
+                    </p>
+                  )
+                )}
+              </div>
+            )}
           </div>
           <button
             onClick={() => remove(ing.id)}

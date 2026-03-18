@@ -1,15 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { buildMyNetDiaryRecipeExport } from "@/lib/mynetdiary";
 import { Recipe } from "@/lib/types";
+import { RecipePriceEstimate } from "@/lib/recipePricing";
 import { getRecipe, saveRecipe } from "@/lib/storage";
 import { markRecipeViewed } from "@/lib/recentViews";
-import IngredientEditor from "@/components/IngredientEditor";
+import IngredientEditor, { IngredientEditorMeta } from "@/components/IngredientEditor";
 import Link from "next/link";
 import {
+  AlertCircle,
   ArrowLeft,
+  Banknote,
   Check,
   Copy,
   Save,
@@ -26,7 +29,29 @@ import {
   Star,
   Flame,
   CalendarDays,
+  RefreshCw,
 } from "lucide-react";
+
+const PRICING_CACHE_PREFIX = "cooking-be-easy-amazon-pricing";
+const PRICING_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
+
+function buildPricingCacheKey(recipe: Recipe): string {
+  return `${PRICING_CACHE_PREFIX}:${recipe.id}:${recipe.updatedAt}`;
+}
+
+function parseCachedPricing(rawValue: string | null): RecipePriceEstimate | null {
+  if (!rawValue) return null;
+
+  try {
+    const parsed = JSON.parse(rawValue) as RecipePriceEstimate;
+    const estimatedAt = Date.parse(parsed.estimatedAt);
+    if (!Number.isFinite(estimatedAt)) return null;
+    if (Date.now() - estimatedAt > PRICING_CACHE_TTL_MS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 export default function RecipeDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -39,6 +64,11 @@ export default function RecipeDetailPage() {
   const [dirty, setDirty] = useState(false);
   const [myNetDiaryCopied, setMyNetDiaryCopied] = useState(false);
   const [sharingToMyNetDiary, setSharingToMyNetDiary] = useState(false);
+  const [priceEstimate, setPriceEstimate] = useState<RecipePriceEstimate | null>(null);
+  const [pricingLoading, setPricingLoading] = useState(false);
+  const [pricingRefreshing, setPricingRefreshing] = useState(false);
+  const [pricingError, setPricingError] = useState("");
+  const [pricingRefreshNonce, setPricingRefreshNonce] = useState(0);
 
   useEffect(() => {
     getRecipe(id).then((r) => {
@@ -51,6 +81,88 @@ export default function RecipeDetailPage() {
       markRecipeViewed(r.id);
     });
   }, [id, router]);
+
+  useEffect(() => {
+    if (!recipe) return;
+
+    const currentRecipe = recipe;
+    let cancelled = false;
+    const recipeSnapshot = {
+      name: currentRecipe.name,
+      ingredients: currentRecipe.ingredients,
+      updatedAt: currentRecipe.updatedAt,
+      id: currentRecipe.id,
+    };
+    const isManualRefresh = pricingRefreshNonce > 0;
+
+    async function loadPricing() {
+      const cacheKey = buildPricingCacheKey(currentRecipe);
+      if (!isManualRefresh && !dirty && typeof window !== "undefined") {
+        const cached = parseCachedPricing(window.localStorage.getItem(cacheKey));
+        if (cached) {
+          setPriceEstimate(cached);
+          setPricingError("");
+          setPricingLoading(false);
+          setPricingRefreshing(false);
+          return;
+        }
+      }
+
+      if (priceEstimate) {
+        setPricingRefreshing(true);
+      } else {
+        setPricingLoading(true);
+      }
+      setPricingError("");
+
+      try {
+        const response = await fetch("/api/recipe-pricing", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            recipeName: recipeSnapshot.name,
+            ingredients: recipeSnapshot.ingredients,
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(
+            typeof data?.error === "string"
+              ? data.error
+              : "Failed to estimate ingredient prices from Amazon"
+          );
+        }
+
+        if (cancelled) return;
+        setPriceEstimate(data as RecipePriceEstimate);
+        setPricingError("");
+
+        if (!dirty && typeof window !== "undefined") {
+          window.localStorage.setItem(cacheKey, JSON.stringify(data));
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setPricingError(
+          error instanceof Error
+            ? error.message
+            : "Failed to estimate ingredient prices from Amazon"
+        );
+      } finally {
+        if (cancelled) return;
+        setPricingLoading(false);
+        setPricingRefreshing(false);
+      }
+    }
+
+    loadPricing();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pricingRefreshNonce, recipe?.id, recipe?.updatedAt]);
 
   function updateIngredients(ingredients: Recipe["ingredients"]) {
     if (!recipe) return;
@@ -99,6 +211,55 @@ export default function RecipeDetailPage() {
     await saveRecipe(updated);
     setRecipe(updated);
   }
+
+  const ingredientPricingMetaById = useMemo<Record<string, IngredientEditorMeta>>(() => {
+    if (!recipe) return {};
+
+    const estimatesById = new Map(
+      (priceEstimate?.ingredients ?? []).map((estimate) => [estimate.ingredientId, estimate])
+    );
+
+    return recipe.ingredients.reduce<Record<string, IngredientEditorMeta>>((acc, ingredient) => {
+      const estimate = estimatesById.get(ingredient.id);
+
+      if (estimate?.adjustedPriceText) {
+        acc[ingredient.id] = {
+          label: `Amazon est. ${estimate.adjustedPriceText}`,
+          detail:
+            estimate.matchTitle ??
+            estimate.explanation ??
+            "Matched against Amazon grocery search results.",
+          href: estimate.matchUrl,
+        };
+        return acc;
+      }
+
+      if (estimate?.unavailableReason) {
+        acc[ingredient.id] = {
+          label: "Amazon price unavailable",
+          detail: estimate.unavailableReason,
+        };
+        return acc;
+      }
+
+      if (pricingLoading && !priceEstimate) {
+        acc[ingredient.id] = {
+          label: "Checking Amazon...",
+          detail: "Searching Amazon grocery results for a usable match.",
+        };
+        return acc;
+      }
+
+      if (dirty) {
+        acc[ingredient.id] = {
+          label: "Amazon estimate may be stale",
+          detail: "Save or refresh to update this ingredient price.",
+        };
+      }
+
+      return acc;
+    }, {});
+  }, [dirty, priceEstimate, pricingLoading, recipe]);
 
   if (!recipe) return null;
 
@@ -257,6 +418,64 @@ export default function RecipeDetailPage() {
         </div>
       </div>
 
+      <div className="mb-6 bg-white border border-gray-200 rounded-xl p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+              <Banknote size={18} className="text-brand-600" />
+              Amazon Price Estimate
+            </h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Live Amazon grocery matches adjusted to this recipe&apos;s ingredient quantities.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPricingRefreshNonce((value) => value + 1)}
+            disabled={pricingLoading || pricingRefreshing}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
+          >
+            {pricingLoading || pricingRefreshing ? (
+              <Loader2 size={15} className="animate-spin" />
+            ) : (
+              <RefreshCw size={15} />
+            )}
+            Refresh
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <p className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">
+            {priceEstimate?.unresolvedIngredientCount ? "Partial total" : "Recipe total"}
+          </p>
+          <p className="mt-1 text-2xl font-semibold text-gray-900">
+            {priceEstimate ? priceEstimate.totalAdjustedPriceText : pricingLoading ? "Estimating..." : "--"}
+          </p>
+          <p className="mt-1 text-xs text-gray-500">
+            {priceEstimate
+              ? `${priceEstimate.resolvedIngredientCount}/${recipe.ingredients.length} ingredients priced${
+                  priceEstimate.unresolvedIngredientCount
+                    ? ` · ${priceEstimate.unresolvedIngredientCount} need a manual check`
+                    : ""
+                } · Updated ${new Date(priceEstimate.estimatedAt).toLocaleString()}`
+              : "Amazon grocery results will appear here after the lookup finishes."}
+          </p>
+        </div>
+
+        {dirty && (
+          <p className="mt-3 text-xs text-amber-700">
+            Ingredient edits are not reflected until you save or refresh the estimate.
+          </p>
+        )}
+
+        {pricingError && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <p>{pricingError}</p>
+          </div>
+        )}
+      </div>
+
       {/* Ingredients */}
       <div className="mb-6 bg-white border border-gray-200 rounded-xl p-4 space-y-4">
         <h2 className="font-semibold text-gray-900">Recipe Profile</h2>
@@ -405,6 +624,7 @@ export default function RecipeDetailPage() {
           <>
             <IngredientEditor
               ingredients={recipe.ingredients}
+              metaByIngredientId={ingredientPricingMetaById}
               onChange={(ings) => {
                 updateIngredients(ings);
               }}
