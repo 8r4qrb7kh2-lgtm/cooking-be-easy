@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { buildMyNetDiaryRecipeExport } from "@/lib/mynetdiary";
 import { Recipe } from "@/lib/types";
 import { getRecipe, saveRecipe } from "@/lib/storage";
 import { markRecipeViewed } from "@/lib/recentViews";
@@ -9,6 +10,8 @@ import IngredientEditor from "@/components/IngredientEditor";
 import Link from "next/link";
 import {
   ArrowLeft,
+  Check,
+  Copy,
   Save,
   Camera,
   X,
@@ -17,6 +20,9 @@ import {
   UtensilsCrossed,
   Link2,
   ListOrdered,
+  Loader2,
+  ExternalLink,
+  Share2,
   Star,
   Flame,
   CalendarDays,
@@ -31,6 +37,8 @@ export default function RecipeDetailPage() {
   const [showIngredients, setShowIngredients] = useState(true);
   const [showSteps, setShowSteps] = useState(true);
   const [dirty, setDirty] = useState(false);
+  const [myNetDiaryCopied, setMyNetDiaryCopied] = useState(false);
+  const [sharingToMyNetDiary, setSharingToMyNetDiary] = useState(false);
 
   useEffect(() => {
     getRecipe(id).then((r) => {
@@ -93,6 +101,39 @@ export default function RecipeDetailPage() {
   }
 
   if (!recipe) return null;
+
+  const myNetDiaryExport = buildMyNetDiaryRecipeExport(recipe);
+  const canShareToMyNetDiary =
+    typeof navigator !== "undefined" && typeof navigator.share === "function";
+
+  async function copyMyNetDiaryExport() {
+    try {
+      await navigator.clipboard.writeText(myNetDiaryExport.fullText);
+      setMyNetDiaryCopied(true);
+      setTimeout(() => setMyNetDiaryCopied(false), 2000);
+    } catch {
+      // silently fail
+    }
+  }
+
+  async function shareToMyNetDiary() {
+    if (!canShareToMyNetDiary) return;
+
+    setSharingToMyNetDiary(true);
+    try {
+      await navigator.share({
+        title: myNetDiaryExport.title,
+        text: myNetDiaryExport.fullText,
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      await copyMyNetDiaryExport();
+    } finally {
+      setSharingToMyNetDiary(false);
+    }
+  }
 
   return (
     <div className="max-w-lg mx-auto">
@@ -294,6 +335,61 @@ export default function RecipeDetailPage() {
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 resize-y"
           />
         </div>
+      </div>
+
+      <div className="mb-6 bg-white border border-gray-200 rounded-xl p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold text-gray-900">MyNetDiary Export</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Export this recipe into MyNetDiary&apos;s recipe import flow, then log it there as a meal.
+            </p>
+          </div>
+          <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">
+            Recipe import
+          </span>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {canShareToMyNetDiary && (
+            <button
+              type="button"
+              onClick={shareToMyNetDiary}
+              disabled={sharingToMyNetDiary}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-sm font-medium text-brand-700 transition-colors hover:bg-brand-100 disabled:opacity-60"
+            >
+              {sharingToMyNetDiary ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Share2 size={15} />
+              )}
+              Share to MyNetDiary
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={copyMyNetDiaryExport}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+          >
+            {myNetDiaryCopied ? <Check size={15} /> : <Copy size={15} />}
+            {myNetDiaryCopied ? "Copied" : "Copy for MyNetDiary"}
+          </button>
+
+          <a
+            href="https://www.mynetdiary.com/recipe-import-help.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+          >
+            <ExternalLink size={15} />
+            Import Help
+          </a>
+        </div>
+
+        <p className="mt-3 text-xs text-gray-400">
+          Share works best on iPhone or iPad when the MyNetDiary app and its recipe import share extension are installed.
+        </p>
       </div>
 
       <div>

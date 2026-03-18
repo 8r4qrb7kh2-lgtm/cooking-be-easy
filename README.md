@@ -1,6 +1,6 @@
 # Cooking be easy
 
-A web app for managing recipes, planning weekly meals, and generating grocery lists — with AI-powered ingredient extraction.
+A web app for managing recipes, planning weekly meals, and generating grocery lists — with AI-powered ingredient extraction and USDA-backed unit conversions.
 
 ## Features
 
@@ -14,9 +14,11 @@ A web app for managing recipes, planning weekly meals, and generating grocery li
 
 ## Deploy to Vercel
 
-### 1. Get an Anthropic API key
+### 1. Get API keys
 
 Go to [console.anthropic.com](https://console.anthropic.com) and create an API key.
+
+Go to [FoodData Central](https://fdc.nal.usda.gov/api-key-signup) and create a USDA API key.
 
 ### 2. Push to GitHub
 
@@ -41,6 +43,7 @@ In your Vercel project dashboard → **Settings → Environment Variables**, add
 
 ```
 ANTHROPIC_API_KEY = sk-ant-...your key here...
+USDA_FDC_API_KEY = ...your key here...
 ```
 
 Then redeploy.
@@ -48,9 +51,9 @@ Then redeploy.
 ## Local Development
 
 ```bash
-# Copy env file and add your key
+# Copy env file and add your keys
 cp .env.example .env.local
-# edit .env.local and add ANTHROPIC_API_KEY
+# edit .env.local and add ANTHROPIC_API_KEY and USDA_FDC_API_KEY
 
 npm install
 npm run dev

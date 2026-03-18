@@ -61,6 +61,8 @@ type NavigatorWithWakeLock = Navigator & {
 
 const STEP_INGREDIENT_MAPPING_CACHE_KEY_PREFIX =
   "cooking-be-easy-step-ingredient-map";
+const MOBILE_INGREDIENT_DRAWER_OPEN_THRESHOLD_PX = 56;
+const MOBILE_INGREDIENT_DRAWER_MAX_WIDTH_PX = 384;
 
 const STEP_TIMER_ACTION_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bcarameli[sz](?:e|ed|ing)?\b/i, label: "caramelize" },
@@ -307,6 +309,11 @@ export default function CookingModePage() {
     setQuantityScale(mode === "multiply" ? value : 1 / value);
   }
 
+  function getMobileIngredientDrawerWidthPx(): number {
+    if (typeof window === "undefined") return 320;
+    return Math.min(window.innerWidth * 0.88, MOBILE_INGREDIENT_DRAWER_MAX_WIDTH_PX);
+  }
+
   function resetMobileIngredientHandle() {
     mobileIngredientsEdgeSwipeRef.current = null;
     setMobileIngredientHandleDragging(false);
@@ -345,19 +352,25 @@ export default function CookingModePage() {
       return;
     }
 
-    const pull = Math.max(0, Math.min(88, deltaX));
+    const pull = Math.max(0, Math.min(getMobileIngredientDrawerWidthPx(), deltaX));
     if (pull > 0) {
       event.preventDefault();
       setMobileIngredientHandlePull(pull);
     }
-
-    if (pull >= 44) {
-      setMobileIngredientsOpen(true);
-      resetMobileIngredientHandle();
-    }
   }
 
   function handleMobileIngredientsEdgeTouchEnd() {
+    const shouldOpen =
+      mobileIngredientHandlePull >= MOBILE_INGREDIENT_DRAWER_OPEN_THRESHOLD_PX;
+    mobileIngredientsEdgeSwipeRef.current = null;
+    setMobileIngredientHandleDragging(false);
+    setMobileIngredientHandlePull(0);
+    if (shouldOpen) {
+      setMobileIngredientsOpen(true);
+    }
+  }
+
+  function handleMobileIngredientsEdgeTouchCancel() {
     resetMobileIngredientHandle();
   }
 
@@ -625,6 +638,14 @@ export default function CookingModePage() {
       "font-semibold text-gray-700"
     );
   }, [nextStep, nextStepCitations, renderStepWithIngredientCitations]);
+
+  const mobileIngredientDrawerPreviewActive =
+    !mobileIngredientsOpen && mobileIngredientHandlePull > 0;
+  const showMobileIngredientDrawer =
+    mobileIngredientsOpen || mobileIngredientDrawerPreviewActive;
+  const mobileIngredientDrawerTransform = mobileIngredientsOpen
+    ? "translateX(0)"
+    : `translateX(calc(100% - ${mobileIngredientHandlePull}px))`;
 
   useEffect(() => {
     desktopIngredientPanelRef.current?.scrollTo({ top: 0, behavior: "auto" });
@@ -1104,20 +1125,32 @@ export default function CookingModePage() {
             onTouchStart={handleMobileIngredientsEdgeTouchStart}
             onTouchMove={handleMobileIngredientsEdgeTouchMove}
             onTouchEnd={handleMobileIngredientsEdgeTouchEnd}
-            onTouchCancel={handleMobileIngredientsEdgeTouchEnd}
+            onTouchCancel={handleMobileIngredientsEdgeTouchCancel}
           >
             <ChevronLeft size={16} />
           </div>
         </div>
       )}
 
-      {mobileIngredientsOpen && (
+      {showMobileIngredientDrawer && (
         <div
-          className="lg:hidden fixed inset-0 z-50 bg-black/35 overscroll-contain"
+          className={`lg:hidden fixed inset-0 z-50 overscroll-contain ${
+            mobileIngredientsOpen
+              ? "bg-black/35"
+              : "bg-transparent pointer-events-none"
+          }`}
           onClick={() => setMobileIngredientsOpen(false)}
         >
           <aside
-            className="absolute right-0 top-0 h-full w-[88vw] max-w-sm bg-white p-4 overflow-hidden flex flex-col overscroll-contain"
+            className={`absolute right-0 top-0 h-full w-[88vw] max-w-sm bg-white p-4 overflow-hidden flex flex-col overscroll-contain ${
+              mobileIngredientsOpen ? "pointer-events-auto" : "pointer-events-none"
+            }`}
+            style={{
+              transform: mobileIngredientDrawerTransform,
+              transition: mobileIngredientHandleDragging
+                ? "none"
+                : "transform 220ms ease-out",
+            }}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
