@@ -994,7 +994,7 @@ export default function CookingModePage() {
   if (!recipe) return null;
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="max-w-5xl mx-auto pb-32">
       <div className="flex items-center gap-3 mb-6">
         <Link
           href="/cook"
@@ -1081,30 +1081,40 @@ export default function CookingModePage() {
             </div>
           )}
 
-          <div className="flex gap-3">
-            <button
-              onClick={() => setCurrentStep((s) => Math.max(0, s - 1))}
-              disabled={currentStep === 0}
-              className="flex-1 flex items-center justify-center gap-2 py-3 bg-white border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              <ChevronLeft size={18} />
-              Previous
-            </button>
-            <button
-              onClick={() =>
-                setCurrentStep((s) => Math.min(totalSteps - 1, s + 1))
-              }
-              disabled={currentStep === totalSteps - 1}
-              className="flex-1 flex items-center justify-center gap-2 py-3 bg-brand-600 text-white rounded-xl font-medium hover:bg-brand-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              Next
-              <ChevronRight size={18} />
-            </button>
-          </div>
         </div>
 
         <div className="hidden lg:block lg:w-80 shrink-0">
           {renderIngredientPanel(desktopIngredientPanelRef, desktopCurrentStepSectionRef)}
+        </div>
+      </div>
+
+      <div
+        className="fixed inset-x-0 z-40 px-4"
+        style={{ bottom: "calc(env(safe-area-inset-bottom) + 4.75rem)" }}
+      >
+        <div className="mx-auto max-w-5xl lg:pr-[21.5rem]">
+          <div className="rounded-2xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-white/80">
+            <div className="flex gap-3">
+              <button
+                onClick={() => setCurrentStep((s) => Math.max(0, s - 1))}
+                disabled={currentStep === 0}
+                className="flex-1 flex items-center justify-center gap-2 py-3 bg-white border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft size={18} />
+                Previous
+              </button>
+              <button
+                onClick={() =>
+                  setCurrentStep((s) => Math.min(totalSteps - 1, s + 1))
+                }
+                disabled={currentStep === totalSteps - 1}
+                className="flex-1 flex items-center justify-center gap-2 py-3 bg-brand-600 text-white rounded-xl font-medium hover:bg-brand-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                Next
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

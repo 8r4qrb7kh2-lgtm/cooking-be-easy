@@ -11,12 +11,12 @@ import { v4 as uuidv4 } from "uuid";
 import { ArrowLeft, Loader2, Sparkles, ChevronRight, Camera, Link2, PenLine } from "lucide-react";
 import Link from "next/link";
 
-type Step = "name" | "source" | "review";
+type Step = "source" | "review";
 type SourceMode = "photo" | "url" | "manual";
 
 export default function NewRecipePage() {
   const router = useRouter();
-  const [step, setStep] = useState<Step>("name");
+  const [step, setStep] = useState<Step>("source");
   const [sourceMode, setSourceMode] = useState<SourceMode>("photo");
   const [name, setName] = useState("");
   const [photo, setPhoto] = useState<string | null>(null);
@@ -30,6 +30,7 @@ export default function NewRecipePage() {
 
   async function analyzePhoto(base64: string) {
     setPhoto(base64);
+    setSourceUrl(undefined);
     setAnalyzing(true);
     setError("");
     try {
@@ -41,6 +42,9 @@ export default function NewRecipePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Analysis failed");
 
+      if (typeof data.name === "string" && data.name.trim()) {
+        setName(data.name.trim());
+      }
       setIngredients(
         (data.ingredients || []).map(
           (item: { name: string; quantity: string; unit: string; section: string }) => ({
@@ -63,6 +67,7 @@ export default function NewRecipePage() {
 
   async function importFromUrl() {
     if (!urlInput.trim()) return;
+    setPhoto(null);
     setAnalyzing(true);
     setError("");
     try {
@@ -74,7 +79,9 @@ export default function NewRecipePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Import failed");
 
-      if (data.name && !name.trim()) setName(data.name);
+      if (typeof data.name === "string" && data.name.trim()) {
+        setName(data.name.trim());
+      }
       setIngredients(
         (data.ingredients || []).map(
           (item: { name: string; quantity: string; unit: string; section: string }) => ({
@@ -113,7 +120,9 @@ export default function NewRecipePage() {
     router.push(`/recipes/${recipe.id}`);
   }
 
-  const stepLabels: Record<Step, string> = { name: "Name", source: "Source", review: "Review" };
+  const stepOrder: Step[] = ["source", "review"];
+  const stepLabels: Record<Step, string> = { source: "Source", review: "Review" };
+  const currentStepIndex = stepOrder.indexOf(step);
 
   return (
     <div className="max-w-lg mx-auto">
@@ -126,13 +135,13 @@ export default function NewRecipePage() {
 
       {/* Step indicators */}
       <div className="flex items-center gap-2 mb-8">
-        {(["name", "source", "review"] as Step[]).map((s, i) => (
+        {stepOrder.map((s, i) => (
           <div key={s} className="flex items-center gap-2">
             <div
               className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
                 s === step
                   ? "bg-brand-600 text-white"
-                  : (step === "review" || (step === "source" && i === 0))
+                  : i < currentStepIndex
                   ? "bg-brand-100 text-brand-700"
                   : "bg-gray-100 text-gray-400"
               }`}
@@ -142,36 +151,10 @@ export default function NewRecipePage() {
             <span className={`text-xs ${s === step ? "text-brand-700 font-medium" : "text-gray-400"}`}>
               {stepLabels[s]}
             </span>
-            {i < 2 && <ChevronRight size={14} className="text-gray-300" />}
+            {i < stepOrder.length - 1 && <ChevronRight size={14} className="text-gray-300" />}
           </div>
         ))}
       </div>
-
-      {/* Step: Name */}
-      {step === "name" && (
-        <div className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Recipe name</label>
-            <input
-              autoFocus
-              className="w-full px-4 py-3 border border-gray-300 rounded-xl text-base focus:outline-none focus:ring-2 focus:ring-brand-500"
-              placeholder="e.g. Chicken Tikka Masala"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && name.trim() && setStep("source")}
-            />
-            <p className="text-xs text-gray-400 mt-1.5">
-              You can also leave this blank — it will be filled in automatically when importing from a URL.
-            </p>
-          </div>
-          <button
-            onClick={() => setStep("source")}
-            className="w-full py-3 bg-brand-600 text-white rounded-xl font-medium hover:bg-brand-700 transition-colors"
-          >
-            Continue
-          </button>
-        </div>
-      )}
 
       {/* Step: Source */}
       {step === "source" && (
@@ -256,9 +239,23 @@ export default function NewRecipePage() {
               <p className="text-sm text-gray-600">
                 Skip straight to the ingredient editor and add everything by hand.
               </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Recipe name
+                </label>
+                <input
+                  autoFocus
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl text-base focus:outline-none focus:ring-2 focus:ring-brand-500"
+                  placeholder="e.g. Chicken Tikka Masala"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && name.trim() && setStep("review")}
+                />
+              </div>
               <button
                 onClick={() => setStep("review")}
-                className="w-full py-3 bg-brand-600 text-white rounded-xl font-medium hover:bg-brand-700 transition-colors"
+                disabled={!name.trim()}
+                className="w-full py-3 bg-brand-600 text-white rounded-xl font-medium hover:bg-brand-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Continue to Editor
               </button>
@@ -283,7 +280,7 @@ export default function NewRecipePage() {
               className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm font-semibold focus:outline-none focus:ring-1 focus:ring-brand-500"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Enter recipe name"
+              placeholder="Recipe name"
             />
           </div>
 

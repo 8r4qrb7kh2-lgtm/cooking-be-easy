@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
 
     const message = await client.messages.create({
       model: "claude-sonnet-4-5-20250929",
-      max_tokens: 2048,
+      max_tokens: 3072,
       messages: [
         {
           role: "user",
@@ -33,7 +33,13 @@ export async function POST(request: NextRequest) {
             },
             {
               type: "text",
-              text: `Analyze this image of a recipe or ingredient list. Extract every ingredient mentioned with its quantity and unit of measurement. Also extract any cooking steps/instructions if they are visible in the image.
+              text: `Analyze this image of a recipe or ingredient list. Extract the recipe name, every ingredient mentioned with its quantity and unit of measurement, and any cooking steps/instructions that are visible.
+
+Important rules:
+- If a recipe title is visible, use it.
+- If no explicit title is visible but this is clearly a recipe, infer a concise likely recipe name from the ingredients and steps.
+- Preserve ingredient wording and prep details. Do not shorten "yellow onion, diced" to "onion", and do not drop qualifiers like chopped, minced, divided, softened, melted, room temperature, or "for serving".
+- Keep ingredient names lowercase. Recipe names should use normal title casing.
 
 For each ingredient, categorize it into one of these grocery store sections:
 - Produce (fresh fruits, vegetables, herbs)
@@ -51,6 +57,7 @@ For each ingredient, categorize it into one of these grocery store sections:
 
 Return ONLY valid JSON (no markdown, no explanation) in exactly this format:
 {
+  "name": "recipe name, or empty string if not identifiable",
   "ingredients": [
     {
       "name": "ingredient name (lowercase)",
@@ -80,6 +87,7 @@ If you cannot identify any steps/instructions, use an empty array for "steps".`,
 
     const parsed = JSON.parse(jsonMatch[0]);
     return NextResponse.json({
+      name: typeof parsed.name === "string" ? parsed.name : "",
       ingredients: parsed.ingredients || [],
       steps: normalizeRecipeSteps(parsed.steps || []),
     });
