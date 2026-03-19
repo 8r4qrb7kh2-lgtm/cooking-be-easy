@@ -20,6 +20,8 @@ Go to [console.anthropic.com](https://console.anthropic.com) and create an API k
 
 Go to [FoodData Central](https://fdc.nal.usda.gov/api-key-signup) and create a USDA API key.
 
+Create a MealMe API account and copy your `Id-Token` from the MealMe dashboard/docs flow.
+
 ### 2. Push to GitHub
 
 ```bash
@@ -43,6 +45,7 @@ In your Vercel project dashboard → **Settings → Environment Variables**, add
 
 ```
 ANTHROPIC_API_KEY = sk-ant-...your key here...
+MEALME_ID_TOKEN = ...your MealMe Id-Token here...
 USDA_FDC_API_KEY = ...your key here...
 ```
 
@@ -53,12 +56,17 @@ Then redeploy.
 ```bash
 # Copy env file and add your keys
 cp .env.example .env.local
-# edit .env.local and add ANTHROPIC_API_KEY and USDA_FDC_API_KEY
+# edit .env.local and add ANTHROPIC_API_KEY, MEALME_ID_TOKEN, and USDA_FDC_API_KEY
 
 npm install
 npm run dev
 # Open http://localhost:3000
 ```
+
+## MealMe Pricing Notes
+
+- Recipe detail pricing uses MealMe's nearby grocery inventory, so the browser will prompt for location access the first time you use it.
+- If `MEALME_ID_TOKEN` is missing or invalid, the recipe page will show a setup error instead of a price estimate.
 
 ## Data Storage
 

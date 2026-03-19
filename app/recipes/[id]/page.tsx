@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { buildMyNetDiaryRecipeExport } from "@/lib/mynetdiary";
 import { Recipe } from "@/lib/types";
-import { RecipePriceEstimate } from "@/lib/recipePricing";
+import { RecipePriceEstimate, RecipePricingLocation } from "@/lib/recipePricing";
 import { getRecipe, saveRecipe } from "@/lib/storage";
 import { markRecipeViewed } from "@/lib/recentViews";
 import IngredientEditor, { IngredientEditorMeta } from "@/components/IngredientEditor";
@@ -30,13 +30,21 @@ import {
   Flame,
   CalendarDays,
   RefreshCw,
+  LocateFixed,
 } from "lucide-react";
 
-const PRICING_CACHE_PREFIX = "cooking-be-easy-amazon-pricing";
+const PRICING_CACHE_PREFIX = "cooking-be-easy-mealme-pricing";
 const PRICING_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
+const PRICING_LOCATION_STORAGE_KEY = "cooking-be-easy-mealme-location";
 
-function buildPricingCacheKey(recipe: Recipe): string {
-  return `${PRICING_CACHE_PREFIX}:${recipe.id}:${recipe.updatedAt}`;
+function buildPricingCacheKey(recipe: Recipe, location: RecipePricingLocation): string {
+  return [
+    PRICING_CACHE_PREFIX,
+    recipe.id,
+    recipe.updatedAt,
+    location.latitude.toFixed(3),
+    location.longitude.toFixed(3),
+  ].join(":");
 }
 
 function parseCachedPricing(rawValue: string | null): RecipePriceEstimate | null {
@@ -48,6 +56,35 @@ function parseCachedPricing(rawValue: string | null): RecipePriceEstimate | null
     if (!Number.isFinite(estimatedAt)) return null;
     if (Date.now() - estimatedAt > PRICING_CACHE_TTL_MS) return null;
     return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredPricingLocation(rawValue: string | null): RecipePricingLocation | null {
+  if (!rawValue) return null;
+
+  try {
+    const parsed = JSON.parse(rawValue) as Partial<RecipePricingLocation>;
+    if (
+      typeof parsed.latitude !== "number" ||
+      !Number.isFinite(parsed.latitude) ||
+      typeof parsed.longitude !== "number" ||
+      !Number.isFinite(parsed.longitude) ||
+      typeof parsed.capturedAt !== "string"
+    ) {
+      return null;
+    }
+
+    return {
+      latitude: parsed.latitude,
+      longitude: parsed.longitude,
+      accuracyMeters:
+        typeof parsed.accuracyMeters === "number" && Number.isFinite(parsed.accuracyMeters)
+          ? parsed.accuracyMeters
+          : null,
+      capturedAt: parsed.capturedAt,
+    };
   } catch {
     return null;
   }
@@ -68,6 +105,9 @@ export default function RecipeDetailPage() {
   const [pricingLoading, setPricingLoading] = useState(false);
   const [pricingRefreshing, setPricingRefreshing] = useState(false);
   const [pricingError, setPricingError] = useState("");
+  const [pricingLocation, setPricingLocation] = useState<RecipePricingLocation | null>(null);
+  const [pricingLocationError, setPricingLocationError] = useState("");
+  const [pricingLocating, setPricingLocating] = useState(false);
   const [pricingRefreshNonce, setPricingRefreshNonce] = useState(0);
 
   useEffect(() => {
@@ -83,9 +123,19 @@ export default function RecipeDetailPage() {
   }, [id, router]);
 
   useEffect(() => {
-    if (!recipe) return;
+    if (typeof window === "undefined") return;
+    setPricingLocation(parseStoredPricingLocation(window.localStorage.getItem(PRICING_LOCATION_STORAGE_KEY)));
+  }, []);
+
+  useEffect(() => {
+    if (!recipe || !pricingLocation) {
+      setPricingLoading(false);
+      setPricingRefreshing(false);
+      return;
+    }
 
     const currentRecipe = recipe;
+    const currentPricingLocation = pricingLocation;
     let cancelled = false;
     const recipeSnapshot = {
       name: currentRecipe.name,
@@ -93,10 +143,11 @@ export default function RecipeDetailPage() {
       updatedAt: currentRecipe.updatedAt,
       id: currentRecipe.id,
     };
+    const hasExistingEstimate = priceEstimate !== null;
     const isManualRefresh = pricingRefreshNonce > 0;
 
     async function loadPricing() {
-      const cacheKey = buildPricingCacheKey(currentRecipe);
+      const cacheKey = buildPricingCacheKey(currentRecipe, currentPricingLocation);
       if (!isManualRefresh && !dirty && typeof window !== "undefined") {
         const cached = parseCachedPricing(window.localStorage.getItem(cacheKey));
         if (cached) {
@@ -108,7 +159,7 @@ export default function RecipeDetailPage() {
         }
       }
 
-      if (priceEstimate) {
+      if (hasExistingEstimate) {
         setPricingRefreshing(true);
       } else {
         setPricingLoading(true);
@@ -124,6 +175,7 @@ export default function RecipeDetailPage() {
           body: JSON.stringify({
             recipeName: recipeSnapshot.name,
             ingredients: recipeSnapshot.ingredients,
+            location: currentPricingLocation,
           }),
         });
 
@@ -132,7 +184,7 @@ export default function RecipeDetailPage() {
           throw new Error(
             typeof data?.error === "string"
               ? data.error
-              : "Failed to estimate ingredient prices from Amazon"
+              : "Failed to estimate ingredient prices from MealMe"
           );
         }
 
@@ -148,7 +200,7 @@ export default function RecipeDetailPage() {
         setPricingError(
           error instanceof Error
             ? error.message
-            : "Failed to estimate ingredient prices from Amazon"
+            : "Failed to estimate ingredient prices from MealMe"
         );
       } finally {
         if (cancelled) return;
@@ -162,7 +214,12 @@ export default function RecipeDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [pricingRefreshNonce, recipe?.id, recipe?.updatedAt]);
+  }, [
+    pricingLocation,
+    pricingRefreshNonce,
+    recipe?.id,
+    recipe?.updatedAt,
+  ]);
 
   function updateIngredients(ingredients: Recipe["ingredients"]) {
     if (!recipe) return;
@@ -180,6 +237,57 @@ export default function RecipeDetailPage() {
     if (!recipe) return;
     setRecipe({ ...recipe, notes });
     setDirty(true);
+  }
+
+  async function requestPricingLocation() {
+    if (typeof window === "undefined") return;
+
+    if (!navigator.geolocation) {
+      setPricingLocationError("This browser does not expose location access for MealMe pricing.");
+      return;
+    }
+
+    setPricingLocating(true);
+    setPricingLocationError("");
+
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: false,
+          timeout: 15000,
+          maximumAge: 1000 * 60 * 10,
+        });
+      });
+
+      const nextLocation: RecipePricingLocation = {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracyMeters: Number.isFinite(position.coords.accuracy)
+          ? Math.round(position.coords.accuracy)
+          : null,
+        capturedAt: new Date().toISOString(),
+      };
+
+      window.localStorage.setItem(PRICING_LOCATION_STORAGE_KEY, JSON.stringify(nextLocation));
+      setPricingLocation(nextLocation);
+      setPricingLocationError("");
+    } catch (error) {
+      const geolocationError =
+        error && typeof error === "object" && "code" in error
+          ? (error as { code?: number })
+          : null;
+
+      const message =
+        geolocationError?.code === 1
+          ? "MealMe pricing needs your location permission to search nearby stores."
+          : geolocationError?.code === 3
+            ? "Location lookup timed out. Try again in a moment."
+            : "Could not determine your location for MealMe pricing.";
+
+      setPricingLocationError(message);
+    } finally {
+      setPricingLocating(false);
+    }
   }
 
   async function handleSave() {
@@ -223,49 +331,67 @@ export default function RecipeDetailPage() {
       const estimate = estimatesById.get(ingredient.id);
 
       if (estimate?.adjustedPriceText) {
+        const detailParts = [
+          estimate.matchTitle,
+          estimate.matchStore,
+          estimate.packageSizeText,
+        ].filter(Boolean);
+
         acc[ingredient.id] = {
-          label: `Amazon est. ${estimate.adjustedPriceText}`,
+          label: `MealMe est. ${estimate.adjustedPriceText}`,
           detail:
-            estimate.matchTitle ??
-            estimate.explanation ??
-            "Matched against Amazon grocery search results.",
-          href: estimate.matchUrl,
+            detailParts.length > 0
+              ? detailParts.join(" · ")
+              : estimate.explanation ?? "Matched against nearby MealMe grocery results.",
         };
         return acc;
       }
 
       if (estimate?.unavailableReason) {
         acc[ingredient.id] = {
-          label: "Amazon price unavailable",
+          label: "MealMe price unavailable",
           detail: estimate.unavailableReason,
+        };
+        return acc;
+      }
+
+      if (!pricingLocation) {
+        acc[ingredient.id] = {
+          label: "Location needed",
+          detail: "Use your current location to search nearby MealMe grocery products.",
         };
         return acc;
       }
 
       if (pricingLoading && !priceEstimate) {
         acc[ingredient.id] = {
-          label: "Checking Amazon...",
-          detail: "Searching Amazon grocery results for a usable match.",
+          label: "Checking MealMe...",
+          detail: "Searching nearby MealMe grocery results for a usable match.",
         };
         return acc;
       }
 
       if (dirty) {
         acc[ingredient.id] = {
-          label: "Amazon estimate may be stale",
+          label: "MealMe estimate may be stale",
           detail: "Save or refresh to update this ingredient price.",
         };
       }
 
       return acc;
     }, {});
-  }, [dirty, priceEstimate, pricingLoading, recipe]);
+  }, [dirty, priceEstimate, pricingLoading, pricingLocation, recipe]);
 
   if (!recipe) return null;
 
   const myNetDiaryExport = buildMyNetDiaryRecipeExport(recipe);
   const canShareToMyNetDiary =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
+  const pricingLocationSummary = pricingLocation
+    ? `Using current location${
+        pricingLocation.accuracyMeters ? ` (about ${pricingLocation.accuracyMeters}m accuracy)` : ""
+      }. Updated ${new Date(pricingLocation.capturedAt).toLocaleString()}.`
+    : "MealMe needs your current location to search nearby grocery inventory.";
 
   async function copyMyNetDiaryExport() {
     try {
@@ -423,49 +549,79 @@ export default function RecipeDetailPage() {
           <div>
             <h2 className="font-semibold text-gray-900 flex items-center gap-2">
               <Banknote size={18} className="text-brand-600" />
-              Amazon Price Estimate
+              MealMe Price Estimate
             </h2>
             <p className="text-sm text-gray-500 mt-1">
-              Live Amazon grocery matches adjusted to this recipe&apos;s ingredient quantities.
+              Nearby grocery matches adjusted to this recipe&apos;s ingredient quantities.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => setPricingRefreshNonce((value) => value + 1)}
-            disabled={pricingLoading || pricingRefreshing}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
-          >
-            {pricingLoading || pricingRefreshing ? (
-              <Loader2 size={15} className="animate-spin" />
-            ) : (
-              <RefreshCw size={15} />
-            )}
-            Refresh
-          </button>
+          <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={requestPricingLocation}
+              disabled={pricingLocating}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
+            >
+              {pricingLocating ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <LocateFixed size={15} />
+              )}
+              {pricingLocation ? "Update location" : "Use my location"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPricingRefreshNonce((value) => value + 1)}
+              disabled={!pricingLocation || pricingLocating || pricingLoading || pricingRefreshing}
+              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
+            >
+              {pricingLoading || pricingRefreshing ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <RefreshCw size={15} />
+              )}
+              Refresh
+            </button>
+          </div>
         </div>
 
-        <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">
-            {priceEstimate?.unresolvedIngredientCount ? "Partial total" : "Recipe total"}
-          </p>
-          <p className="mt-1 text-2xl font-semibold text-gray-900">
-            {priceEstimate ? priceEstimate.totalAdjustedPriceText : pricingLoading ? "Estimating..." : "--"}
-          </p>
-          <p className="mt-1 text-xs text-gray-500">
-            {priceEstimate
-              ? `${priceEstimate.resolvedIngredientCount}/${recipe.ingredients.length} ingredients priced${
-                  priceEstimate.unresolvedIngredientCount
-                    ? ` · ${priceEstimate.unresolvedIngredientCount} need a manual check`
-                    : ""
-                } · Updated ${new Date(priceEstimate.estimatedAt).toLocaleString()}`
-              : "Amazon grocery results will appear here after the lookup finishes."}
-          </p>
-        </div>
+        <p className="mt-3 text-xs text-gray-400">{pricingLocationSummary}</p>
+
+        {pricingLocation ? (
+          <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+            <p className="text-[11px] font-medium uppercase tracking-wide text-emerald-700">
+              {priceEstimate?.unresolvedIngredientCount ? "Partial total" : "Recipe total"}
+            </p>
+            <p className="mt-1 text-2xl font-semibold text-gray-900">
+              {priceEstimate ? priceEstimate.totalAdjustedPriceText : pricingLoading ? "Estimating..." : "--"}
+            </p>
+            <p className="mt-1 text-xs text-gray-500">
+              {priceEstimate
+                ? `${priceEstimate.resolvedIngredientCount}/${recipe.ingredients.length} ingredients priced${
+                    priceEstimate.unresolvedIngredientCount
+                      ? ` · ${priceEstimate.unresolvedIngredientCount} need a manual check`
+                      : ""
+                  } · Updated ${new Date(priceEstimate.estimatedAt).toLocaleString()}`
+                : "MealMe grocery results will appear here after the lookup finishes."}
+            </p>
+          </div>
+        ) : (
+          <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+            Allow location access once, then tap Refresh to fetch nearby grocery pricing from MealMe.
+          </div>
+        )}
 
         {dirty && (
           <p className="mt-3 text-xs text-amber-700">
             Ingredient edits are not reflected until you save or refresh the estimate.
           </p>
+        )}
+
+        {pricingLocationError && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <p>{pricingLocationError}</p>
+          </div>
         )}
 
         {pricingError && (

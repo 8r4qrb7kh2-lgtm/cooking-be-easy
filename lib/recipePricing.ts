@@ -1,3 +1,18 @@
+import type { Ingredient } from "@/lib/types";
+
+export interface RecipePricingLocation {
+  latitude: number;
+  longitude: number;
+  accuracyMeters?: number | null;
+  capturedAt: string;
+}
+
+export interface RecipePricingRequest {
+  recipeName?: string;
+  ingredients?: Ingredient[];
+  location?: RecipePricingLocation | null;
+}
+
 export interface IngredientPriceEstimate {
   ingredientId: string;
   ingredientName: string;
@@ -5,9 +20,11 @@ export interface IngredientPriceEstimate {
   unit: string;
   adjustedPrice: number | null;
   adjustedPriceText: string | null;
-  amazonPackagePrice: number | null;
-  amazonPackagePriceText: string | null;
+  packagePrice: number | null;
+  packagePriceText: string | null;
+  packageSizeText?: string;
   matchTitle?: string;
+  matchStore?: string;
   matchUrl?: string;
   confidence: number | null;
   explanation?: string;
@@ -15,6 +32,7 @@ export interface IngredientPriceEstimate {
 }
 
 export interface RecipePriceEstimate {
+  provider: "mealme";
   estimatedAt: string;
   currencyCode: "USD";
   totalAdjustedPrice: number;
