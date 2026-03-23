@@ -1,16 +1,8 @@
 import type { Ingredient } from "@/lib/types";
 
-export interface RecipePricingLocation {
-  latitude: number;
-  longitude: number;
-  accuracyMeters?: number | null;
-  capturedAt: string;
-}
-
 export interface RecipePricingRequest {
   recipeName?: string;
   ingredients?: Ingredient[];
-  location?: RecipePricingLocation | null;
 }
 
 export interface IngredientPriceEstimate {
@@ -32,7 +24,7 @@ export interface IngredientPriceEstimate {
 }
 
 export interface RecipePriceEstimate {
-  provider: "mealme";
+  provider: "spoonacular";
   estimatedAt: string;
   currencyCode: "USD";
   totalAdjustedPrice: number;

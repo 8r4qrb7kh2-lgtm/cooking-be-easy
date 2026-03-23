@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { estimateRecipeWithMealMe, PricingRouteError } from "@/lib/mealMePricing";
+import { estimateRecipeWithSpoonacular, PricingRouteError } from "@/lib/spoonacularPricing";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const estimate = await estimateRecipeWithMealMe(body);
+    const estimate = await estimateRecipeWithSpoonacular(body);
     return NextResponse.json(estimate);
   } catch (error) {
     console.error("Recipe pricing error:", error);
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to estimate MealMe ingredient prices.",
+            : "Failed to estimate grocery ingredient prices.",
       },
       { status: 500 }
     );

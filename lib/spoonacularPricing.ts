@@ -1,14 +1,13 @@
 import {
   IngredientPriceEstimate,
   RecipePriceEstimate,
-  RecipePricingLocation,
   RecipePricingRequest,
 } from "@/lib/recipePricing";
 import { Ingredient } from "@/lib/types";
 
-const MEALME_API_BASE_URL = "https://api.mealme.ai";
-const MEALME_SEARCH_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
-const MEALME_RESULT_LIMIT = 8;
+const SPOONACULAR_API_BASE_URL = "https://api.spoonacular.com";
+const SPOONACULAR_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
+const SPOONACULAR_PRODUCT_CANDIDATE_LIMIT = 2;
 
 const SEARCH_CLEANUP_PATTERNS = [
   /\([^)]*\)/g,
@@ -74,11 +73,19 @@ const COUNT_UNITS = new Set([
   "packages",
   "pack",
   "packs",
+  "packet",
+  "packets",
   "piece",
   "pieces",
+  "pc",
+  "pcs",
   "pkg",
+  "serving",
+  "servings",
   "sheet",
   "sheets",
+  "slice",
+  "slices",
   "sprig",
   "sprigs",
   "stalk",
@@ -159,9 +166,14 @@ const UNICODE_FRACTIONS: Record<string, string> = {
   "⅞": "7/8",
 };
 
-const searchCache = new Map<
+const ingredientMapCache = new Map<
   string,
-  { expiresAt: number; value: Promise<MealMeProduct[]> }
+  { expiresAt: number; value: Promise<SpoonacularMappedIngredient[]> }
+>();
+
+const productCache = new Map<
+  number,
+  { expiresAt: number; value: Promise<SpoonacularProduct | null> }
 >();
 
 type MeasurementDimension = "count" | "volume" | "weight";
@@ -172,23 +184,27 @@ interface Measurement {
   dimension: MeasurementDimension;
 }
 
-interface MealMeProduct {
-  productId?: string;
-  itemName: string;
-  description?: string;
-  category?: string;
-  formattedPrice?: string;
-  packageSizeText?: string;
-  priceCents: number;
-  storeName?: string;
-  storeType?: string;
-  unitOfMeasurement?: string;
-  unitSize?: number;
+interface SpoonacularMappedProduct {
+  id: number;
+  title: string;
+  upc?: string;
 }
 
-interface MealMeSearchResponse {
-  products?: unknown;
-  error?: unknown;
+interface SpoonacularMappedIngredient {
+  original?: string;
+  originalName?: string;
+  products: SpoonacularMappedProduct[];
+}
+
+interface SpoonacularProduct {
+  productId: number;
+  title: string;
+  breadcrumbs?: string[];
+  packageSizeText?: string;
+  priceCents: number;
+  servingCount?: number;
+  servingSize?: number;
+  servingUnit?: string;
 }
 
 export class PricingRouteError extends Error {
@@ -238,6 +254,15 @@ function sanitizeOptionalInteger(value: unknown): number | null {
   return Math.round(parsed);
 }
 
+function sanitizeStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const normalized = value
+    .map((entry) => sanitizeOptionalText(entry))
+    .filter((entry): entry is string => Boolean(entry));
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function isIngredient(input: unknown): input is Ingredient {
   if (!input || typeof input !== "object") return false;
   const candidate = input as Partial<Ingredient>;
@@ -248,46 +273,6 @@ function isIngredient(input: unknown): input is Ingredient {
     typeof candidate.unit === "string" &&
     typeof candidate.section === "string"
   );
-}
-
-function normalizeLocation(input: unknown): RecipePricingLocation {
-  if (!input || typeof input !== "object") {
-    throw new PricingRouteError(
-      "Pricing location is required. Use your current location before refreshing MealMe pricing.",
-      400
-    );
-  }
-
-  const candidate = input as Partial<RecipePricingLocation>;
-  const latitude = sanitizeOptionalNumber(candidate.latitude);
-  const longitude = sanitizeOptionalNumber(candidate.longitude);
-
-  if (latitude === null || latitude < -90 || latitude > 90) {
-    throw new PricingRouteError("Pricing latitude is invalid.", 400);
-  }
-
-  if (longitude === null || longitude < -180 || longitude > 180) {
-    throw new PricingRouteError("Pricing longitude is invalid.", 400);
-  }
-
-  return {
-    latitude,
-    longitude,
-    accuracyMeters: sanitizeOptionalNumber(candidate.accuracyMeters),
-    capturedAt:
-      typeof candidate.capturedAt === "string" && Number.isFinite(Date.parse(candidate.capturedAt))
-        ? candidate.capturedAt
-        : new Date().toISOString(),
-  };
-}
-
-function buildSearchQuery(ingredientName: string): string {
-  const cleaned = SEARCH_CLEANUP_PATTERNS.reduce(
-    (current, pattern) => current.replace(pattern, " "),
-    ingredientName
-  );
-
-  return cleanText(cleaned) || cleanText(ingredientName);
 }
 
 function getCachedPromise<K, V>(
@@ -307,15 +292,24 @@ function getCachedPromise<K, V>(
   });
 
   cache.set(key, {
-    expiresAt: now + MEALME_SEARCH_CACHE_TTL_MS,
+    expiresAt: now + SPOONACULAR_CACHE_TTL_MS,
     value,
   });
 
   return value;
 }
 
-function buildSearchCacheKey(query: string, location: RecipePricingLocation): string {
-  return `${query.toLowerCase()}|${location.latitude.toFixed(3)}|${location.longitude.toFixed(3)}`;
+function buildSearchQuery(ingredientName: string): string {
+  const cleaned = SEARCH_CLEANUP_PATTERNS.reduce(
+    (current, pattern) => current.replace(pattern, " "),
+    ingredientName
+  );
+
+  return cleanText(cleaned) || cleanText(ingredientName);
+}
+
+function buildIngredientMapCacheKey(ingredients: Ingredient[]): string {
+  return ingredients.map((ingredient) => buildSearchQuery(ingredient.name).toLowerCase()).join("|");
 }
 
 function formatPackageSize(unitSize: number | undefined, unitOfMeasurement: string | undefined): string | undefined {
@@ -331,118 +325,212 @@ function formatPackageSize(unitSize: number | undefined, unitOfMeasurement: stri
   return `${printableAmount} ${cleanText(unitOfMeasurement)}`;
 }
 
-function parseMealMeProduct(input: unknown): MealMeProduct | null {
+function parseMappedProduct(input: unknown): SpoonacularMappedProduct | null {
   if (!input || typeof input !== "object") return null;
 
   const candidate = input as Record<string, unknown>;
-  const itemName = sanitizeOptionalText(candidate.item_name);
-  const priceCents = sanitizeOptionalInteger(candidate.price);
-  if (!itemName || priceCents === null || priceCents <= 0) return null;
-
-  const unitSize = sanitizeOptionalNumber(candidate.unit_size) ?? undefined;
-  const unitOfMeasurement = sanitizeOptionalText(candidate.unit_of_measurement);
-  const store =
-    candidate.store && typeof candidate.store === "object"
-      ? (candidate.store as Record<string, unknown>)
-      : undefined;
+  const id = sanitizeOptionalInteger(candidate.id);
+  const title = sanitizeOptionalText(candidate.title);
+  if (id === null || id <= 0 || !title) return null;
 
   return {
-    productId: sanitizeOptionalText(candidate.product_id),
-    itemName,
-    description: sanitizeOptionalText(candidate.description),
-    category: sanitizeOptionalText(candidate.category),
-    formattedPrice: sanitizeOptionalText(candidate.formatted_price),
-    packageSizeText: formatPackageSize(unitSize, unitOfMeasurement),
-    priceCents,
-    storeName: sanitizeOptionalText(store?.name),
-    storeType: sanitizeOptionalText(store?.type),
-    unitOfMeasurement,
-    unitSize,
+    id,
+    title,
+    upc: sanitizeOptionalText(candidate.upc),
   };
 }
 
-async function searchMealMeProducts(
-  ingredientName: string,
-  location: RecipePricingLocation
-): Promise<MealMeProduct[]> {
-  const token = process.env.MEALME_ID_TOKEN?.trim();
-  if (!token) {
+function parseMappedIngredient(input: unknown): SpoonacularMappedIngredient {
+  if (!input || typeof input !== "object") {
+    return { products: [] };
+  }
+
+  const candidate = input as Record<string, unknown>;
+  const products = Array.isArray(candidate.products)
+    ? candidate.products
+        .map(parseMappedProduct)
+        .filter((product): product is SpoonacularMappedProduct => Boolean(product))
+    : [];
+
+  return {
+    original: sanitizeOptionalText(candidate.original),
+    originalName: sanitizeOptionalText(candidate.originalName),
+    products,
+  };
+}
+
+function parseSpoonacularProduct(input: unknown): SpoonacularProduct | null {
+  if (!input || typeof input !== "object") return null;
+
+  const candidate = input as Record<string, unknown>;
+  const productId = sanitizeOptionalInteger(candidate.id);
+  const title = sanitizeOptionalText(candidate.title);
+  const priceCents = sanitizeOptionalInteger(candidate.price);
+  if (productId === null || productId <= 0 || !title || priceCents === null || priceCents <= 0) {
+    return null;
+  }
+
+  const servings =
+    candidate.servings && typeof candidate.servings === "object"
+      ? (candidate.servings as Record<string, unknown>)
+      : undefined;
+
+  const servingCount = sanitizeOptionalNumber(servings?.number) ?? undefined;
+  const servingSize = sanitizeOptionalNumber(servings?.size) ?? undefined;
+  const servingUnit = sanitizeOptionalText(servings?.unit) ?? sanitizeOptionalText(servings?.raw);
+  const totalSize =
+    servingCount && servingSize && Number.isFinite(servingCount * servingSize)
+      ? servingCount * servingSize
+      : undefined;
+
+  return {
+    productId,
+    title,
+    breadcrumbs: sanitizeStringArray(candidate.breadcrumbs),
+    packageSizeText: formatPackageSize(totalSize, servingUnit),
+    priceCents,
+    servingCount,
+    servingSize,
+    servingUnit,
+  };
+}
+
+function extractProviderMessage(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") return undefined;
+
+  const candidate = input as Record<string, unknown>;
+  return (
+    sanitizeOptionalText(candidate.message) ??
+    sanitizeOptionalText(candidate.error) ??
+    sanitizeOptionalText(candidate.status)
+  );
+}
+
+function getApiKey(): string {
+  const apiKey = process.env.SPOONACULAR_API_KEY?.trim();
+  if (!apiKey) {
     throw new PricingRouteError(
-      "MealMe pricing is not configured on this deployment. Add MEALME_ID_TOKEN in Vercel before using recipe pricing.",
+      "Spoonacular pricing is not configured on this deployment. Add SPOONACULAR_API_KEY in Vercel before using recipe pricing.",
       503
     );
   }
 
-  const query = buildSearchQuery(ingredientName);
-  const cacheKey = buildSearchCacheKey(query, location);
+  return apiKey;
+}
 
-  return getCachedPromise(searchCache, cacheKey, async () => {
-    const url = new URL("/search/product/v4", MEALME_API_BASE_URL);
-    url.searchParams.set("query", query);
-    url.searchParams.set("user_latitude", String(location.latitude));
-    url.searchParams.set("user_longitude", String(location.longitude));
-    url.searchParams.set("pickup", "false");
-    url.searchParams.set("fuzzy_search", "true");
-    url.searchParams.set("sort", "relevance");
-    url.searchParams.set("maximum_miles", "10");
-    url.searchParams.set("use_new_db", "true");
+async function mapIngredientsToProducts(ingredients: Ingredient[]): Promise<SpoonacularMappedIngredient[]> {
+  const apiKey = getApiKey();
+  const cacheKey = buildIngredientMapCacheKey(ingredients);
 
-    const response = await fetch(url.toString(), {
+  return getCachedPromise(ingredientMapCache, cacheKey, async () => {
+    const response = await fetch(`${SPOONACULAR_API_BASE_URL}/food/ingredients/map`, {
+      method: "POST",
       headers: {
         accept: "application/json",
-        "Id-Token": token,
+        "content-type": "application/json",
+        "x-api-key": apiKey,
       },
+      body: JSON.stringify({
+        ingredients: ingredients.map((ingredient) => buildSearchQuery(ingredient.name)),
+        servings: 1,
+      }),
       cache: "no-store",
     });
 
-    let payload: MealMeSearchResponse | null = null;
+    let payload: unknown = null;
     try {
-      payload = (await response.json()) as MealMeSearchResponse;
+      payload = await response.json();
     } catch {
       payload = null;
     }
 
     if (!response.ok) {
-      const providerMessage = sanitizeOptionalText(payload?.error);
+      const providerMessage = extractProviderMessage(payload);
 
       if (response.status === 401 || response.status === 403) {
         throw new PricingRouteError(
           providerMessage ??
-            "MealMe rejected the configured Id-Token. Check the MEALME_ID_TOKEN value in Vercel.",
+            "Spoonacular rejected the configured API key. Check the SPOONACULAR_API_KEY value in Vercel.",
+          503
+        );
+      }
+
+      if (response.status === 402) {
+        throw new PricingRouteError(
+          providerMessage ??
+            "Spoonacular's daily quota is exhausted for this API key. Try again after the quota resets.",
           503
         );
       }
 
       throw new PricingRouteError(
-        providerMessage ?? `MealMe product search failed with status ${response.status}.`,
+        providerMessage ?? `Spoonacular ingredient mapping failed with status ${response.status}.`,
         response.status >= 500 ? 502 : response.status
       );
     }
 
-    const products = Array.isArray(payload?.products)
-      ? payload.products.map(parseMealMeProduct).filter((product): product is MealMeProduct => Boolean(product))
-      : [];
+    const mappedIngredients = Array.isArray(payload) ? payload.map(parseMappedIngredient) : [];
 
-    const deduped: MealMeProduct[] = [];
-    const seen = new Set<string>();
-
-    for (const product of products) {
-      const key = [
-        product.productId,
-        product.itemName,
-        product.storeName,
-        product.priceCents,
-        product.packageSizeText,
-      ].join("|");
-
-      if (seen.has(key)) continue;
-      seen.add(key);
-      deduped.push(product);
-
-      if (deduped.length >= MEALME_RESULT_LIMIT) break;
+    if (mappedIngredients.length >= ingredients.length) {
+      return mappedIngredients.slice(0, ingredients.length);
     }
 
-    return deduped;
+    return [
+      ...mappedIngredients,
+      ...Array.from({ length: ingredients.length - mappedIngredients.length }, () => ({ products: [] })),
+    ];
+  });
+}
+
+async function getProductDetails(productId: number): Promise<SpoonacularProduct | null> {
+  const apiKey = getApiKey();
+
+  return getCachedPromise(productCache, productId, async () => {
+    const response = await fetch(`${SPOONACULAR_API_BASE_URL}/food/products/${productId}`, {
+      headers: {
+        accept: "application/json",
+        "x-api-key": apiKey,
+      },
+      cache: "no-store",
+    });
+
+    let payload: unknown = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      const providerMessage = extractProviderMessage(payload);
+
+      if (response.status === 401 || response.status === 403) {
+        throw new PricingRouteError(
+          providerMessage ??
+            "Spoonacular rejected the configured API key. Check the SPOONACULAR_API_KEY value in Vercel.",
+          503
+        );
+      }
+
+      if (response.status === 402) {
+        throw new PricingRouteError(
+          providerMessage ??
+            "Spoonacular's daily quota is exhausted for this API key. Try again after the quota resets.",
+          503
+        );
+      }
+
+      if (response.status === 404) {
+        return null;
+      }
+
+      throw new PricingRouteError(
+        providerMessage ?? `Spoonacular product lookup failed with status ${response.status}.`,
+        response.status >= 500 ? 502 : response.status
+      );
+    }
+
+    return parseSpoonacularProduct(payload);
   });
 }
 
@@ -560,7 +648,7 @@ function toMeasurement(
 
 function buildComparableMeasurements(
   ingredient: Ingredient,
-  product: MealMeProduct
+  product: SpoonacularProduct
 ): { ingredientMeasure: Measurement; productMeasure: Measurement } | null {
   const ingredientAmount = parseQuantity(ingredient.quantity);
   if (ingredientAmount === null || ingredientAmount <= 0) {
@@ -568,9 +656,11 @@ function buildComparableMeasurements(
   }
 
   const ingredientMeasure = toMeasurement(ingredientAmount, ingredient.unit);
+  const totalProductAmount =
+    product.servingCount && product.servingSize ? product.servingCount * product.servingSize : null;
   const productMeasure =
-    product.unitSize && product.unitOfMeasurement
-      ? toMeasurement(product.unitSize, product.unitOfMeasurement, ingredientMeasure?.dimension)
+    totalProductAmount && product.servingUnit
+      ? toMeasurement(totalProductAmount, product.servingUnit, ingredientMeasure?.dimension)
       : null;
 
   if (!ingredientMeasure && productMeasure) {
@@ -614,17 +704,13 @@ function tokenize(value: string): string[] {
     .filter((token) => !TOKEN_STOPWORDS.has(token));
 }
 
-function buildSearchText(product: MealMeProduct): string {
-  return cleanText(
-    [product.itemName, product.description, product.category, product.storeName]
-      .filter(Boolean)
-      .join(" ")
-  ).toLowerCase();
+function buildSearchText(product: SpoonacularProduct): string {
+  return cleanText([product.title, ...(product.breadcrumbs ?? [])].filter(Boolean).join(" ")).toLowerCase();
 }
 
 function scoreProduct(
   queryTokens: string[],
-  product: MealMeProduct,
+  product: SpoonacularProduct,
   canAdjustPrice: boolean
 ): number {
   const searchText = buildSearchText(product);
@@ -640,12 +726,6 @@ function scoreProduct(
     score += 4;
   }
 
-  if (product.storeType === "grocery") {
-    score += 3;
-  } else if (product.storeType === "restaurant") {
-    score -= 4;
-  }
-
   if (canAdjustPrice) {
     score += 6;
   }
@@ -657,15 +737,15 @@ function scoreProduct(
   return score;
 }
 
-function buildMatchDetail(product: MealMeProduct): string | undefined {
-  const parts = [product.itemName, product.storeName, product.packageSizeText].filter(Boolean);
+function buildMatchDetail(product: SpoonacularProduct): string | undefined {
+  const parts = [product.title, product.packageSizeText].filter(Boolean);
   return parts.length ? parts.join(" · ") : undefined;
 }
 
 function buildUnavailableEstimate(
   ingredient: Ingredient,
   reason: string,
-  product?: MealMeProduct
+  product?: SpoonacularProduct
 ): IngredientPriceEstimate {
   const packagePrice = product ? roundToCents(product.priceCents / 100) : null;
 
@@ -679,8 +759,7 @@ function buildUnavailableEstimate(
     packagePrice,
     packagePriceText: packagePrice !== null ? formatUsd(packagePrice) : null,
     packageSizeText: product?.packageSizeText,
-    matchTitle: product?.itemName,
-    matchStore: product?.storeName,
+    matchTitle: product?.title,
     confidence: product ? 0.35 : null,
     explanation: product ? buildMatchDetail(product) : undefined,
     unavailableReason: reason,
@@ -689,18 +768,18 @@ function buildUnavailableEstimate(
 
 function estimateIngredientPrice(
   ingredient: Ingredient,
-  products: MealMeProduct[]
+  products: SpoonacularProduct[]
 ): IngredientPriceEstimate {
   if (products.length === 0) {
     return buildUnavailableEstimate(
       ingredient,
-      "MealMe did not return a nearby grocery match for this ingredient."
+      "Spoonacular did not return a usable grocery product for this ingredient."
     );
   }
 
   const queryTokens = tokenize(ingredient.name);
   let bestScore = Number.NEGATIVE_INFINITY;
-  let bestProduct: MealMeProduct | undefined;
+  let bestProduct: SpoonacularProduct | undefined;
   let bestAdjustedPrice: number | null = null;
   let bestConfidence = 0.3;
 
@@ -731,9 +810,7 @@ function estimateIngredientPrice(
           : 0.5;
 
       bestConfidence = clampConfidence(
-        (bestAdjustedPrice !== null ? 0.55 : 0.28) +
-          tokenCoverage * 0.25 +
-          (product.storeType === "grocery" ? 0.1 : 0)
+        (bestAdjustedPrice !== null ? 0.58 : 0.28) + tokenCoverage * 0.25
       );
     }
   }
@@ -741,7 +818,7 @@ function estimateIngredientPrice(
   if (!bestProduct || !Number.isFinite(bestScore)) {
     return buildUnavailableEstimate(
       ingredient,
-      "MealMe did not return a confident grocery match for this ingredient."
+      "Spoonacular did not return a confident grocery match for this ingredient."
     );
   }
 
@@ -751,7 +828,7 @@ function estimateIngredientPrice(
   if (bestAdjustedPrice === null) {
     return buildUnavailableEstimate(
       ingredient,
-      "MealMe found a nearby product, but its package size could not be converted to this recipe quantity automatically.",
+      "Spoonacular found a product, but its package size could not be converted to this recipe quantity automatically.",
       bestProduct
     );
   }
@@ -766,8 +843,7 @@ function estimateIngredientPrice(
     packagePrice,
     packagePriceText: formatUsd(packagePrice),
     packageSizeText: bestProduct.packageSizeText,
-    matchTitle: bestProduct.itemName,
-    matchStore: bestProduct.storeName,
+    matchTitle: bestProduct.title,
     confidence: bestConfidence,
     explanation: matchDetail,
     unavailableReason: null,
@@ -797,13 +873,13 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-export async function estimateRecipeWithMealMe(input: unknown): Promise<RecipePriceEstimate> {
+export async function estimateRecipeWithSpoonacular(input: unknown): Promise<RecipePriceEstimate> {
   const body = (input ?? {}) as RecipePricingRequest;
   const ingredients = Array.isArray(body.ingredients) ? body.ingredients.filter(isIngredient) : [];
 
   if (ingredients.length === 0) {
     return {
-      provider: "mealme",
+      provider: "spoonacular",
       estimatedAt: new Date().toISOString(),
       currencyCode: "USD",
       totalAdjustedPrice: 0,
@@ -814,12 +890,24 @@ export async function estimateRecipeWithMealMe(input: unknown): Promise<RecipePr
     };
   }
 
-  const location = normalizeLocation(body.location);
+  const mappedIngredients = await mapIngredientsToProducts(ingredients);
 
-  const estimates = await mapWithConcurrency(ingredients, 4, async (ingredient) => {
-    const products = await searchMealMeProducts(ingredient.name, location);
-    return estimateIngredientPrice(ingredient, products);
-  });
+  const estimates = await mapWithConcurrency(
+    ingredients.map((ingredient, index) => ({
+      ingredient,
+      candidates: mappedIngredients[index]?.products.slice(0, SPOONACULAR_PRODUCT_CANDIDATE_LIMIT) ?? [],
+    })),
+    4,
+    async ({ ingredient, candidates }) => {
+      const products = (
+        await mapWithConcurrency(candidates, SPOONACULAR_PRODUCT_CANDIDATE_LIMIT, async (candidate) =>
+          getProductDetails(candidate.id)
+        )
+      ).filter((product): product is SpoonacularProduct => Boolean(product));
+
+      return estimateIngredientPrice(ingredient, products);
+    }
+  );
 
   const totalAdjustedPrice = roundToCents(
     estimates.reduce((sum, estimate) => sum + (estimate.adjustedPrice ?? 0), 0)
@@ -829,7 +917,7 @@ export async function estimateRecipeWithMealMe(input: unknown): Promise<RecipePr
   ).length;
 
   return {
-    provider: "mealme",
+    provider: "spoonacular",
     estimatedAt: new Date().toISOString(),
     currencyCode: "USD",
     totalAdjustedPrice,
