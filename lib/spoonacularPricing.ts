@@ -7,7 +7,7 @@ import { Ingredient } from "@/lib/types";
 
 const SPOONACULAR_API_BASE_URL = "https://api.spoonacular.com";
 const SPOONACULAR_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
-const SPOONACULAR_PRODUCT_CANDIDATE_LIMIT = 2;
+const SPOONACULAR_PRODUCT_CANDIDATE_LIMIT = 1;
 
 const SEARCH_CLEANUP_PATTERNS = [
   /\([^)]*\)/g,
@@ -166,6 +166,39 @@ const UNICODE_FRACTIONS: Record<string, string> = {
   "⅞": "7/8",
 };
 
+const TITLE_PACK_MULTIPLIER_PATTERNS = [
+  /\bpack of\s+(\d+)\b/i,
+  /\bcase of\s+(\d+)\b/i,
+  /\b(\d+)\s*-\s*pack\b/i,
+  /\b(\d+)\s+pack\b/i,
+  /\b(\d+)\s*[x×]\s*(?=(?:\d|\.\d))/i,
+] as const;
+
+const DENSITY_OVERRIDES: Array<{ pattern: RegExp; gramsPerMilliliter: number }> = [
+  { pattern: /\bnutritional yeast\b/i, gramsPerMilliliter: 0.17 },
+  {
+    pattern: /\b(powdered sugar|confectioners sugar|confectioners' sugar|icing sugar)\b/i,
+    gramsPerMilliliter: 0.47,
+  },
+  { pattern: /\bcocoa powder\b/i, gramsPerMilliliter: 0.53 },
+  { pattern: /\b(baking powder|baking soda)\b/i, gramsPerMilliliter: 0.9 },
+  {
+    pattern:
+      /\b(cinnamon|paprika|cumin|turmeric|coriander|garlic powder|onion powder|chili powder|cayenne|pepper|allspice|nutmeg|ginger|clove)\b/i,
+    gramsPerMilliliter: 0.5,
+  },
+  {
+    pattern:
+      /\b(parsley|oregano|thyme|basil|rosemary|dill|sage|tarragon|marjoram|mint|chives)\b/i,
+    gramsPerMilliliter: 0.16,
+  },
+  { pattern: /\bflour\b/i, gramsPerMilliliter: 0.53 },
+  { pattern: /\b(sugar|brown sugar)\b/i, gramsPerMilliliter: 0.85 },
+  { pattern: /\boats?\b/i, gramsPerMilliliter: 0.35 },
+  { pattern: /\brice\b/i, gramsPerMilliliter: 0.85 },
+  { pattern: /\bbreadcrumbs?\b/i, gramsPerMilliliter: 0.43 },
+] as const;
+
 const ingredientMapCache = new Map<
   string,
   { expiresAt: number; value: Promise<SpoonacularMappedIngredient[]> }
@@ -182,6 +215,13 @@ interface Measurement {
   amount: number;
   baseAmount: number;
   dimension: MeasurementDimension;
+}
+
+interface ProductPackageMeasurement {
+  amount: number;
+  unit: string;
+  displayText: string;
+  source: "servings" | "title";
 }
 
 interface SpoonacularMappedProduct {
@@ -201,6 +241,7 @@ interface SpoonacularProduct {
   title: string;
   breadcrumbs?: string[];
   packageSizeText?: string;
+  packageMeasurements: ProductPackageMeasurement[];
   priceCents: number;
   servingCount?: number;
   servingSize?: number;
@@ -325,6 +366,80 @@ function formatPackageSize(unitSize: number | undefined, unitOfMeasurement: stri
   return `${printableAmount} ${cleanText(unitOfMeasurement)}`;
 }
 
+function parsePackMultiplier(title: string): number {
+  for (const pattern of TITLE_PACK_MULTIPLIER_PATTERNS) {
+    const match = title.match(pattern);
+    if (!match) continue;
+
+    const parsed = Number(match[1]);
+    if (Number.isFinite(parsed) && parsed > 1) {
+      return parsed;
+    }
+  }
+
+  return 1;
+}
+
+function parseTitlePackageMeasurements(title: string): ProductPackageMeasurement[] {
+  const measurementPattern =
+    /((?:\d+\s+\d+\/\d+)|(?:\d+\/\d+)|(?:\d*\.\d+)|(?:\d+))\s*(?:-\s*)?(fluid ounces?|fluid ozs?|fluid oz|fl oz|floz|ounces?|oz|pounds?|lbs?|lb|kilograms?|kg|grams?|g|milliliters?|millilitres?|ml|liters?|litres?|l|quarts?|qt|pints?|pt|gallons?|gal|tablespoons?|table spoon|tbsp|tbl|teaspoons?|tea spoon|tsp|cups?|counts?|ct|each|pieces?|pcs?|servings?)\b/gi;
+
+  const multiplier = parsePackMultiplier(title);
+  const candidates: ProductPackageMeasurement[] = [];
+
+  for (const match of title.matchAll(measurementPattern)) {
+    const amount = parseQuantity(match[1] ?? "");
+    const unit = cleanText(match[2] ?? "").toLowerCase();
+    if (amount === null || amount <= 0 || !unit) continue;
+
+    const totalAmount = amount * multiplier;
+    const displayText = formatPackageSize(totalAmount, unit);
+    if (!displayText) continue;
+
+    candidates.push({
+      amount: totalAmount,
+      unit,
+      displayText,
+      source: "title",
+    });
+  }
+
+  const deduped: ProductPackageMeasurement[] = [];
+
+  for (const candidate of candidates) {
+    const normalizedUnit = normalizeUnitKey(candidate.unit);
+    const alreadyIncluded = deduped.some(
+      (existing) =>
+        normalizeUnitKey(existing.unit) === normalizedUnit &&
+        Math.abs(existing.amount - candidate.amount) < 0.001
+    );
+
+    if (!alreadyIncluded) {
+      deduped.push(candidate);
+    }
+  }
+
+  deduped.sort((left, right) => {
+    const leftDimension = toMeasurement(1, left.unit)?.dimension;
+    const rightDimension = toMeasurement(1, right.unit)?.dimension;
+
+    if (leftDimension === "count" && rightDimension !== "count") return 1;
+    if (leftDimension !== "count" && rightDimension === "count") return -1;
+    return right.amount - left.amount;
+  });
+
+  return deduped;
+}
+
+function chooseDefaultPackageMeasurement(
+  measurements: ProductPackageMeasurement[]
+): ProductPackageMeasurement | undefined {
+  return (
+    measurements.find((measurement) => toMeasurement(1, measurement.unit)?.dimension !== "count") ??
+    measurements[0]
+  );
+}
+
 function parseMappedProduct(input: unknown): SpoonacularMappedProduct | null {
   if (!input || typeof input !== "object") return null;
 
@@ -382,12 +497,39 @@ function parseSpoonacularProduct(input: unknown): SpoonacularProduct | null {
     servingCount && servingSize && Number.isFinite(servingCount * servingSize)
       ? servingCount * servingSize
       : undefined;
+  const packageMeasurements: ProductPackageMeasurement[] = [];
+
+  const servingsPackageSizeText = formatPackageSize(totalSize, servingUnit);
+  if (servingsPackageSizeText && totalSize && servingUnit) {
+    packageMeasurements.push({
+      amount: totalSize,
+      unit: servingUnit,
+      displayText: servingsPackageSizeText,
+      source: "servings",
+    });
+  }
+
+  for (const titleMeasurement of parseTitlePackageMeasurements(title)) {
+    const normalizedUnit = normalizeUnitKey(titleMeasurement.unit);
+    const alreadyIncluded = packageMeasurements.some(
+      (measurement) =>
+        normalizeUnitKey(measurement.unit) === normalizedUnit &&
+        Math.abs(measurement.amount - titleMeasurement.amount) < 0.001
+    );
+
+    if (!alreadyIncluded) {
+      packageMeasurements.push(titleMeasurement);
+    }
+  }
+
+  const defaultPackageMeasurement = chooseDefaultPackageMeasurement(packageMeasurements);
 
   return {
     productId,
     title,
     breadcrumbs: sanitizeStringArray(candidate.breadcrumbs),
-    packageSizeText: formatPackageSize(totalSize, servingUnit),
+    packageSizeText: defaultPackageMeasurement?.displayText,
+    packageMeasurements,
     priceCents,
     servingCount,
     servingSize,
@@ -574,7 +716,7 @@ function parseQuantity(value: string): number | null {
     return parseFraction(fractionMatch[1]);
   }
 
-  const decimalMatch = normalized.match(/^(\d+(?:\.\d+)?)/);
+  const decimalMatch = normalized.match(/^((?:\d*\.\d+)|(?:\d+))/);
   if (decimalMatch) {
     const parsed = Number(decimalMatch[1]);
     return Number.isFinite(parsed) ? parsed : null;
@@ -646,53 +788,166 @@ function toMeasurement(
   return null;
 }
 
+function getDensityEstimate(ingredient: Ingredient): number | null {
+  const normalizedName = cleanText(ingredient.name).toLowerCase();
+
+  for (const override of DENSITY_OVERRIDES) {
+    if (override.pattern.test(normalizedName)) {
+      return override.gramsPerMilliliter;
+    }
+  }
+
+  if (ingredient.section === "Spices & Baking") {
+    if (/\b(dried|leaf|flakes?|herb)\b/i.test(normalizedName)) {
+      return 0.16;
+    }
+
+    return 0.4;
+  }
+
+  return null;
+}
+
+function convertMeasurementDimension(
+  measurement: Measurement,
+  targetDimension: MeasurementDimension,
+  gramsPerMilliliter: number
+): Measurement | null {
+  if (!Number.isFinite(gramsPerMilliliter) || gramsPerMilliliter <= 0) {
+    return null;
+  }
+
+  if (measurement.dimension === targetDimension) {
+    return measurement;
+  }
+
+  if (measurement.dimension === "volume" && targetDimension === "weight") {
+    return {
+      amount: measurement.amount,
+      baseAmount: measurement.baseAmount * gramsPerMilliliter,
+      dimension: "weight",
+    };
+  }
+
+  if (measurement.dimension === "weight" && targetDimension === "volume") {
+    return {
+      amount: measurement.amount,
+      baseAmount: measurement.baseAmount / gramsPerMilliliter,
+      dimension: "volume",
+    };
+  }
+
+  return null;
+}
+
+function buildProductMeasurementOptions(
+  packageMeasurement: ProductPackageMeasurement,
+  preferredDimension?: MeasurementDimension
+): Measurement[] {
+  const normalizedUnit = normalizeUnitKey(packageMeasurement.unit);
+
+  if (!AMBIGUOUS_OUNCE_UNITS.has(normalizedUnit)) {
+    const resolvedMeasurement = toMeasurement(
+      packageMeasurement.amount,
+      packageMeasurement.unit,
+      preferredDimension
+    );
+    return resolvedMeasurement ? [resolvedMeasurement] : [];
+  }
+
+  const dimensionOrder =
+    packageMeasurement.source === "title"
+      ? (["weight", "volume"] as const)
+      : preferredDimension
+        ? ([preferredDimension, preferredDimension === "weight" ? "volume" : "weight"] as const)
+        : (["weight", "volume"] as const);
+
+  const measurements: Measurement[] = [];
+
+  for (const dimension of dimensionOrder) {
+    const resolvedMeasurement = toMeasurement(
+      packageMeasurement.amount,
+      packageMeasurement.unit,
+      dimension
+    );
+
+    if (
+      resolvedMeasurement &&
+      !measurements.some((measurement) => measurement.dimension === resolvedMeasurement.dimension)
+    ) {
+      measurements.push(resolvedMeasurement);
+    }
+  }
+
+  return measurements;
+}
+
 function buildComparableMeasurements(
   ingredient: Ingredient,
   product: SpoonacularProduct
-): { ingredientMeasure: Measurement; productMeasure: Measurement } | null {
+): {
+  ingredientMeasure: Measurement;
+  productMeasure: Measurement;
+  packageSizeText?: string;
+  usedApproximateDensity: boolean;
+} | null {
   const ingredientAmount = parseQuantity(ingredient.quantity);
   if (ingredientAmount === null || ingredientAmount <= 0) {
     return null;
   }
 
-  const ingredientMeasure = toMeasurement(ingredientAmount, ingredient.unit);
-  const totalProductAmount =
-    product.servingCount && product.servingSize ? product.servingCount * product.servingSize : null;
-  const productMeasure =
-    totalProductAmount && product.servingUnit
-      ? toMeasurement(totalProductAmount, product.servingUnit, ingredientMeasure?.dimension)
-      : null;
+  const baseIngredientMeasure = toMeasurement(ingredientAmount, ingredient.unit);
+  const densityEstimate = getDensityEstimate(ingredient);
 
-  if (!ingredientMeasure && productMeasure) {
-    const resolvedIngredientMeasure = toMeasurement(
-      ingredientAmount,
-      ingredient.unit,
-      productMeasure.dimension
-    );
+  for (const packageMeasurement of product.packageMeasurements) {
+    for (const productMeasure of buildProductMeasurementOptions(
+      packageMeasurement,
+      baseIngredientMeasure?.dimension
+    )) {
+      const exactIngredientMeasure =
+        baseIngredientMeasure?.dimension === productMeasure.dimension
+          ? baseIngredientMeasure
+          : baseIngredientMeasure
+            ? null
+            : toMeasurement(ingredientAmount, ingredient.unit, productMeasure.dimension);
 
-    if (
-      resolvedIngredientMeasure &&
-      resolvedIngredientMeasure.dimension === productMeasure.dimension
-    ) {
-      return {
-        ingredientMeasure: resolvedIngredientMeasure,
-        productMeasure,
-      };
+      if (exactIngredientMeasure && exactIngredientMeasure.dimension === productMeasure.dimension) {
+        return {
+          ingredientMeasure: exactIngredientMeasure,
+          productMeasure,
+          packageSizeText: packageMeasurement.displayText,
+          usedApproximateDensity: false,
+        };
+      }
+
+      if (!baseIngredientMeasure) {
+        continue;
+      }
+
+      const densityAdjustedIngredientMeasure =
+        densityEstimate === null
+          ? null
+          : convertMeasurementDimension(
+              baseIngredientMeasure,
+              productMeasure.dimension,
+              densityEstimate
+            );
+
+      if (
+        densityAdjustedIngredientMeasure &&
+        densityAdjustedIngredientMeasure.dimension === productMeasure.dimension
+      ) {
+        return {
+          ingredientMeasure: densityAdjustedIngredientMeasure,
+          productMeasure,
+          packageSizeText: packageMeasurement.displayText,
+          usedApproximateDensity: true,
+        };
+      }
     }
   }
 
-  if (!ingredientMeasure || !productMeasure) {
-    return null;
-  }
-
-  if (ingredientMeasure.dimension !== productMeasure.dimension) {
-    return null;
-  }
-
-  return {
-    ingredientMeasure,
-    productMeasure,
-  };
+  return null;
 }
 
 function tokenize(value: string): string[] {
@@ -781,6 +1036,7 @@ function estimateIngredientPrice(
   let bestScore = Number.NEGATIVE_INFINITY;
   let bestProduct: SpoonacularProduct | undefined;
   let bestAdjustedPrice: number | null = null;
+  let bestPackageSizeText: string | undefined;
   let bestConfidence = 0.3;
 
   for (const product of products) {
@@ -799,8 +1055,10 @@ function estimateIngredientPrice(
             (comparableMeasurements.ingredientMeasure.baseAmount /
               comparableMeasurements.productMeasure.baseAmount)
         );
+        bestPackageSizeText = comparableMeasurements.packageSizeText ?? product.packageSizeText;
       } else {
         bestAdjustedPrice = null;
+        bestPackageSizeText = product.packageSizeText;
       }
 
       const tokenCoverage =
@@ -810,7 +1068,11 @@ function estimateIngredientPrice(
           : 0.5;
 
       bestConfidence = clampConfidence(
-        (bestAdjustedPrice !== null ? 0.58 : 0.28) + tokenCoverage * 0.25
+        (bestAdjustedPrice !== null
+          ? comparableMeasurements?.usedApproximateDensity
+            ? 0.5
+            : 0.58
+          : 0.28) + tokenCoverage * 0.25
       );
     }
   }
@@ -842,7 +1104,7 @@ function estimateIngredientPrice(
     adjustedPriceText: formatUsd(bestAdjustedPrice),
     packagePrice,
     packagePriceText: formatUsd(packagePrice),
-    packageSizeText: bestProduct.packageSizeText,
+    packageSizeText: bestPackageSizeText ?? bestProduct.packageSizeText,
     matchTitle: bestProduct.title,
     confidence: bestConfidence,
     explanation: matchDetail,
