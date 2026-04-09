@@ -8,6 +8,7 @@ import { RecipePriceEstimate } from "@/lib/recipePricing";
 import { getRecipe, saveRecipe } from "@/lib/storage";
 import { markRecipeViewed } from "@/lib/recentViews";
 import IngredientEditor, { IngredientEditorMeta } from "@/components/IngredientEditor";
+import StepEditor from "@/components/StepEditor";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -32,7 +33,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-const PRICING_CACHE_PREFIX = "cooking-be-easy-spoonacular-pricing";
+const PRICING_CACHE_PREFIX = "cooking-be-easy-open-food-facts-pricing";
 const PRICING_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 
 function buildPricingCacheKey(recipe: Recipe): string {
@@ -179,6 +180,12 @@ export default function RecipeDetailPage() {
     setDirty(true);
   }
 
+  function updateSteps(steps: Recipe["steps"]) {
+    if (!recipe) return;
+    setRecipe({ ...recipe, steps });
+    setDirty(true);
+  }
+
   function updateRecipeProfile(updates: Pick<Recipe, "rating" | "servingsYielded">) {
     if (!recipe) return;
     setRecipe({ ...recipe, ...updates });
@@ -243,7 +250,8 @@ export default function RecipeDetailPage() {
           detail:
             detailParts.length > 0
               ? detailParts.join(" · ")
-              : estimate.explanation ?? "Matched against Spoonacular grocery products.",
+              : estimate.explanation ?? "Matched against Open Food Facts Open Prices products.",
+          href: estimate.matchUrl,
         };
         return acc;
       }
@@ -259,7 +267,7 @@ export default function RecipeDetailPage() {
       if (pricingLoading && !priceEstimate) {
         acc[ingredient.id] = {
           label: "Checking prices...",
-          detail: "Searching Spoonacular grocery products for a usable match.",
+          detail: "Searching Open Food Facts Open Prices products for a usable match.",
         };
         return acc;
       }
@@ -281,7 +289,7 @@ export default function RecipeDetailPage() {
   const canShareToMyNetDiary =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
   const pricingSummary =
-    "Estimated from Spoonacular packaged grocery matches adjusted to this recipe's ingredient quantities.";
+    "Estimated from Open Food Facts Open Prices product matches adjusted to this recipe's ingredient quantities.";
 
   async function copyMyNetDiaryExport() {
     try {
@@ -338,7 +346,7 @@ export default function RecipeDetailPage() {
               onClick={() => setEditingName(true)}
               title="Click to edit name"
             >
-              {recipe.name}
+              {name}
             </h1>
           )}
           <p className="text-xs text-gray-400 mt-0.5">
@@ -474,7 +482,7 @@ export default function RecipeDetailPage() {
                     ? ` · ${priceEstimate.unresolvedIngredientCount} need a manual check`
                     : ""
                 } · Updated ${new Date(priceEstimate.estimatedAt).toLocaleString()}`
-              : "Spoonacular grocery results will appear here after the lookup finishes."}
+              : "Open Food Facts Open Prices results will appear here after the lookup finishes."}
           </p>
         </div>
 
@@ -657,33 +665,35 @@ export default function RecipeDetailPage() {
         )}
       </div>
 
-      {/* Steps */}
-      {recipe.steps?.length > 0 && (
-        <div className="mt-6">
-          <button
-            className="w-full flex items-center justify-between font-semibold text-gray-900 mb-3"
-            onClick={() => setShowSteps(!showSteps)}
-          >
-            <span className="flex items-center gap-2">
-              <ListOrdered size={18} className="text-brand-600" />
-              Steps ({recipe.steps.length})
-            </span>
-            {showSteps ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-          </button>
-          {showSteps && (
-            <ol className="space-y-3">
-              {recipe.steps.map((step, i) => (
-                <li key={i} className="flex gap-3 items-start">
-                  <span className="shrink-0 w-6 h-6 rounded-full bg-brand-100 text-brand-700 text-xs font-bold flex items-center justify-center mt-0.5">
-                    {i + 1}
-                  </span>
-                  <p className="text-sm text-gray-700 leading-relaxed">{step}</p>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-      )}
+      <div className="mt-6">
+        <button
+          className="mb-3 flex w-full items-center justify-between font-semibold text-gray-900"
+          onClick={() => setShowSteps(!showSteps)}
+        >
+          <span className="flex items-center gap-2">
+            <ListOrdered size={18} className="text-brand-600" />
+            Steps{recipe.steps.length > 0 ? ` (${recipe.steps.length})` : ""}
+          </span>
+          {showSteps ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+        </button>
+        {showSteps && (
+          <>
+            <StepEditor
+              steps={recipe.steps}
+              onChange={updateSteps}
+              emptyLabel="No steps saved yet. Add the first one below."
+            />
+            {dirty && (
+              <button
+                onClick={handleSave}
+                className="mt-4 w-full rounded-xl bg-brand-600 py-2.5 font-medium text-white transition-colors hover:bg-brand-700"
+              >
+                Save changes
+              </button>
+            )}
+          </>
+        )}
+      </div>
 
       {/* Original ingredient photo */}
       {recipe.ingredientPhoto && (

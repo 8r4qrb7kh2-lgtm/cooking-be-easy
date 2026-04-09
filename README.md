@@ -20,8 +20,6 @@ Go to [console.anthropic.com](https://console.anthropic.com) and create an API k
 
 Go to [FoodData Central](https://fdc.nal.usda.gov/api-key-signup) and create a USDA API key.
 
-Go to [Spoonacular Food API](https://spoonacular.com/food-api) and create a free API key.
-
 ### 2. Push to GitHub
 
 ```bash
@@ -45,7 +43,6 @@ In your Vercel project dashboard → **Settings → Environment Variables**, add
 
 ```
 ANTHROPIC_API_KEY = sk-ant-...your key here...
-SPOONACULAR_API_KEY = ...your Spoonacular API key here...
 USDA_FDC_API_KEY = ...your key here...
 ```
 
@@ -56,7 +53,7 @@ Then redeploy.
 ```bash
 # Copy env file and add your keys
 cp .env.example .env.local
-# edit .env.local and add ANTHROPIC_API_KEY, SPOONACULAR_API_KEY, and USDA_FDC_API_KEY
+# edit .env.local and add ANTHROPIC_API_KEY and USDA_FDC_API_KEY
 
 npm install
 npm run dev
@@ -65,9 +62,10 @@ npm run dev
 
 ## Grocery Pricing Notes
 
-- Recipe detail pricing uses Spoonacular's packaged grocery data, so no browser location permission is required.
-- Spoonacular's free tier is quota-based. The app caches recipe price estimates for 12 hours to reduce repeat API usage.
-- If `SPOONACULAR_API_KEY` is missing or invalid, the recipe page will show a setup error instead of a price estimate.
+- Recipe detail pricing uses [Open Food Facts Open Prices](https://prices.openfoodfacts.org/api/docs) packaged grocery data, so no browser location permission is required.
+- No extra pricing API key is needed for recipe detail estimates.
+- The app caches recipe price estimates for 12 hours to reduce repeat API usage.
+- Open Food Facts requests should always use a custom `User-Agent` and follow their [API usage conditions](https://support.openfoodfacts.org/help/en-gb/12-api-data-reuse/94-are-there-conditions-to-use-the-api).
 
 ## Data Storage
 

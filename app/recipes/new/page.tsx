@@ -7,6 +7,7 @@ import { saveRecipe } from "@/lib/storage";
 import { normalizeRecipeSteps } from "@/lib/recipeSteps";
 import ImageUpload from "@/components/ImageUpload";
 import IngredientEditor from "@/components/IngredientEditor";
+import StepEditor from "@/components/StepEditor";
 import { v4 as uuidv4 } from "uuid";
 import { ArrowLeft, Loader2, Sparkles, ChevronRight, Camera, Link2, PenLine } from "lucide-react";
 import Link from "next/link";
@@ -298,33 +299,16 @@ export default function NewRecipePage() {
             <IngredientEditor ingredients={ingredients} onChange={setIngredients} />
           </div>
 
-          {/* Steps */}
-          {steps.length > 0 && (
-            <div>
-              <h2 className="font-semibold text-gray-900 text-sm mb-2">
-                Steps ({steps.length})
-              </h2>
-              <div className="space-y-2">
-                {steps.map((step, i) => (
-                  <div key={i} className="flex gap-2 items-start">
-                    <span className="shrink-0 w-5 h-5 mt-0.5 rounded-full bg-brand-100 text-brand-700 text-xs font-bold flex items-center justify-center">
-                      {i + 1}
-                    </span>
-                    <textarea
-                      className="flex-1 text-sm px-2 py-1.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-brand-500 resize-none"
-                      rows={2}
-                      value={step}
-                      onChange={(e) => {
-                        const next = [...steps];
-                        next[i] = e.target.value;
-                        setSteps(next);
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <div>
+            <h2 className="font-semibold text-gray-900 text-sm mb-2">
+              Steps{steps.length > 0 ? ` (${steps.length})` : ""}
+            </h2>
+            <StepEditor
+              steps={steps}
+              onChange={setSteps}
+              emptyLabel="No steps imported yet. Add them manually before saving if you want them on the recipe."
+            />
+          </div>
 
           {sourceUrl && (
             <p className="text-xs text-gray-400 flex items-center gap-1">

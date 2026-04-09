@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { estimateRecipeWithSpoonacular, PricingRouteError } from "@/lib/spoonacularPricing";
+import { estimateRecipeWithOpenFoodFacts, PricingRouteError } from "@/lib/openFoodFactsPricing";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const estimate = await estimateRecipeWithSpoonacular(body);
+    const estimate = await estimateRecipeWithOpenFoodFacts(body);
     return NextResponse.json(estimate);
   } catch (error) {
     console.error("Recipe pricing error:", error);
