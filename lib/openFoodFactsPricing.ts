@@ -5,6 +5,7 @@ import {
   RecipePricingRequest,
 } from "@/lib/recipePricing";
 import { Ingredient } from "@/lib/types";
+import { convertIngredientQuantity, type ExactUnit } from "@/lib/unitConversion";
 
 const OPEN_PRICES_API_BASE_URL = "https://prices.openfoodfacts.org/api/v1";
 const OPEN_PRICES_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
@@ -80,6 +81,16 @@ const PARENTHETICAL_QUERY_HINT_PATTERNS = [
   /\b([a-z][a-z\s-]{1,30}\s+sugar)\b/i,
   /\b([a-z][a-z\s-]{1,30}\s+flakes)\b/i,
 ];
+
+const WEIGHT_PREFERRED_NAME_PATTERNS = [
+  /\b(chili crisp|chilli crisp|gochujang|miso|mole paste|paste|pesto|purée|puree|sambal|spread|tahini|tomato paste)\b/i,
+  /\b(peanut butter|almond butter|sunflower butter|cream cheese|jam|jelly|hummus|nut butter)\b/i,
+] as const;
+
+const VOLUME_PREFERRED_NAME_PATTERNS = [
+  /\b(broth|stock|juice|milk|oil|soy sauce|tamari|vinegar|water|wine)\b/i,
+  /\b(extract|syrup|hot sauce|fish sauce|worcestershire|dressing)\b/i,
+] as const;
 
 const TOKEN_STOPWORDS = new Set([
   "a",
@@ -351,6 +362,10 @@ const DENSITY_OVERRIDES: Array<{ pattern: RegExp; gramsPerMilliliter: number }> 
       /\b(cinnamon|paprika|cumin|turmeric|coriander|garlic powder|onion powder|chili powder|cayenne|pepper|allspice|nutmeg|ginger|clove)\b/i,
     gramsPerMilliliter: 0.5,
   },
+  { pattern: /\b(chili crisp|chilli crisp)\b/i, gramsPerMilliliter: 0.92 },
+  { pattern: /\b(gochujang|korean chili paste|red pepper paste)\b/i, gramsPerMilliliter: 1.2 },
+  { pattern: /\b(tomato purée|tomato puree|tomato paste)\b/i, gramsPerMilliliter: 1.15 },
+  { pattern: /\b(miso|tahini)\b/i, gramsPerMilliliter: 1.2 },
   {
     pattern:
       /\b(parsley|oregano|thyme|basil|rosemary|dill|sage|tarragon|marjoram|mint|chives)\b/i,
@@ -430,6 +445,11 @@ interface ComparableMeasurements {
   usedApproximateDensity: boolean;
 }
 
+interface ResolvedIngredientMeasurement {
+  measurement: Measurement;
+  usedApproximateDensity: boolean;
+}
+
 interface PreliminaryProductMatch {
   product: OpenPricesProduct;
   score: number;
@@ -448,7 +468,11 @@ interface IngredientSearchPlan {
   ingredientId: string;
   canonicalName: string;
   searchQueries: string[];
+  pricingUnit: StandardPricingUnit;
+  pricingQuantity: number | null;
 }
+
+type StandardPricingUnit = "count" | "g" | "ml";
 
 export class PricingRouteError extends Error {
   constructor(
@@ -593,6 +617,54 @@ function extractParentheticalSearchHints(ingredientName: string): string[] {
   return hints;
 }
 
+function sanitizePricingUnit(value: unknown): StandardPricingUnit | null {
+  if (value === "count" || value === "g" || value === "ml") {
+    return value;
+  }
+
+  return null;
+}
+
+function inferHeuristicPricingUnit(ingredient: Ingredient): StandardPricingUnit {
+  const normalizedName = normalizeText(ingredient.name);
+  const normalizedUnit = normalizeUnitKey(ingredient.unit);
+
+  if (COUNT_UNITS.has(normalizedUnit)) {
+    return "count";
+  }
+
+  if (ingredient.section === "Beverages") {
+    return "ml";
+  }
+
+  if (WEIGHT_PREFERRED_NAME_PATTERNS.some((pattern) => pattern.test(normalizedName))) {
+    return "g";
+  }
+
+  if (VOLUME_PREFERRED_NAME_PATTERNS.some((pattern) => pattern.test(normalizedName))) {
+    return "ml";
+  }
+
+  if (ingredient.section === "Condiments & Sauces") {
+    return /\b(oil|sauce|vinegar|dressing)\b/i.test(normalizedName) ? "ml" : "g";
+  }
+
+  if (ingredient.section === "Spices & Baking") {
+    return /\b(extract|food coloring|oil)\b/i.test(normalizedName) ? "ml" : "g";
+  }
+
+  const exactMeasure = toMeasurement(1, ingredient.unit);
+  if (exactMeasure?.dimension === "volume") {
+    return "ml";
+  }
+
+  if (exactMeasure?.dimension === "weight") {
+    return "g";
+  }
+
+  return "g";
+}
+
 function buildHeuristicSearchPlan(ingredient: Ingredient): IngredientSearchPlan {
   const baseQuery = buildSearchQuery(ingredient.name);
   const queries = [baseQuery, ...extractParentheticalSearchHints(ingredient.name)];
@@ -610,6 +682,8 @@ function buildHeuristicSearchPlan(ingredient: Ingredient): IngredientSearchPlan 
     ingredientId: ingredient.id,
     canonicalName,
     searchQueries: dedupedQueries.length > 0 ? dedupedQueries : [canonicalName],
+    pricingUnit: inferHeuristicPricingUnit(ingredient),
+    pricingQuantity: null,
   };
 }
 
@@ -619,6 +693,7 @@ function getIngredientSearchPlanCacheKey(ingredients: Ingredient[]): string {
       [
         ingredient.id,
         normalizeSearchTerm(ingredient.name),
+        normalizeSearchTerm(ingredient.quantity),
         normalizeSearchTerm(ingredient.section),
         normalizeSearchTerm(ingredient.unit),
       ].join(":")
@@ -640,6 +715,8 @@ function parseIngredientSearchPlansResponse(
       ingredientId?: unknown;
       canonicalName?: unknown;
       searchQueries?: unknown;
+      pricingUnit?: unknown;
+      pricingQuantity?: unknown;
     }>;
   };
 
@@ -667,6 +744,8 @@ function parseIngredientSearchPlansResponse(
           )
         )
       : [];
+    const pricingUnit = sanitizePricingUnit(entry.pricingUnit);
+    const pricingQuantity = sanitizeOptionalNumber(entry.pricingQuantity);
 
     if (!canonicalName && searchQueries.length === 0) {
       continue;
@@ -679,6 +758,9 @@ function parseIngredientSearchPlansResponse(
         0,
         SEARCH_QUERY_LIMIT
       ),
+      pricingUnit: pricingUnit ?? "g",
+      pricingQuantity:
+        pricingQuantity !== null && pricingQuantity > 0 ? pricingQuantity : null,
     });
   }
 
@@ -706,6 +788,8 @@ async function inferIngredientSearchPlansWithAi(
 Each ingredient needs:
 - canonicalName: the short, generic grocery item name
 - searchQueries: 2 to 4 short search phrases, ordered best to fallback
+- pricingUnit: choose exactly one of "g", "ml", or "count"
+- pricingQuantity: convert the recipe amount into that pricingUnit and return a number, or null if no sensible conversion is possible
 
 Rules:
 - Remove prep notes, garnish notes, and cooking instructions.
@@ -714,6 +798,13 @@ Rules:
 - Use lowercase only.
 - Queries must be short grocery phrases, not sentences.
 - Do not include quantities, units, brand names, or packaging sizes.
+- Open Prices package sizes are usually metric. Use:
+  - "ml" for liquids like oils, milks, broths, juices, vinegars, and pourable sauces
+  - "g" for solids, powders, spices, pastes, spreads, purées, and thick condiments
+  - "count" for discrete produce or packaged items usually bought by piece, bunch, bulb, can, jar, or package
+- Convert the recipe quantity into that pricingUnit.
+- pricingQuantity must be numeric only, with no unit suffix.
+- If the recipe quantity is a range, use the midpoint.
 - Include common grocery synonyms when they help:
   - scallions -> green onions / spring onions
   - chili flakes -> red pepper flakes / red chili flakes
@@ -739,7 +830,9 @@ Return ONLY valid JSON in exactly this format:
     {
       "ingredientId": "id",
       "canonicalName": "generic grocery item",
-      "searchQueries": ["best query", "fallback query"]
+      "searchQueries": ["best query", "fallback query"],
+      "pricingUnit": "g",
+      "pricingQuantity": 30
     }
   ]
 }`,
@@ -789,6 +882,11 @@ async function buildIngredientSearchPlans(
       ingredientId: ingredient.id,
       canonicalName: aiPlan.canonicalName || heuristicPlan.canonicalName,
       searchQueries: searchQueries.length > 0 ? searchQueries : heuristicPlan.searchQueries,
+      pricingUnit: aiPlan.pricingUnit ?? heuristicPlan.pricingUnit,
+      pricingQuantity:
+        aiPlan.pricingQuantity !== null && aiPlan.pricingQuantity > 0
+          ? aiPlan.pricingQuantity
+          : heuristicPlan.pricingQuantity,
     });
   }
 
@@ -933,8 +1031,27 @@ function toMeasurement(
   return null;
 }
 
-function getDensityEstimate(ingredient: Ingredient): number | null {
-  const normalizedName = cleanText(ingredient.name).toLowerCase();
+function getPricingUnitDimension(pricingUnit: StandardPricingUnit): MeasurementDimension {
+  switch (pricingUnit) {
+    case "count":
+      return "count";
+    case "ml":
+      return "volume";
+    default:
+      return "weight";
+  }
+}
+
+function getPricingUnitExactUnit(pricingUnit: StandardPricingUnit): ExactUnit | null {
+  if (pricingUnit === "count") {
+    return null;
+  }
+
+  return pricingUnit;
+}
+
+function getDensityEstimateForName(name: string, section: Ingredient["section"]): number | null {
+  const normalizedName = cleanText(name).toLowerCase();
 
   for (const override of DENSITY_OVERRIDES) {
     if (override.pattern.test(normalizedName)) {
@@ -942,7 +1059,7 @@ function getDensityEstimate(ingredient: Ingredient): number | null {
     }
   }
 
-  if (ingredient.section === "Spices & Baking") {
+  if (section === "Spices & Baking") {
     if (/\b(dried|leaf|flakes?|herb)\b/i.test(normalizedName)) {
       return 0.16;
     }
@@ -951,6 +1068,134 @@ function getDensityEstimate(ingredient: Ingredient): number | null {
   }
 
   return null;
+}
+
+function getDensityEstimate(
+  ingredient: Ingredient,
+  searchPlan?: IngredientSearchPlan
+): number | null {
+  const names = dedupeQueries([
+    ingredient.name,
+    searchPlan?.canonicalName ?? "",
+    ...(searchPlan?.searchQueries ?? []),
+  ]);
+
+  for (const name of names) {
+    const estimate = getDensityEstimateForName(name, ingredient.section);
+    if (estimate !== null) {
+      return estimate;
+    }
+  }
+
+  return null;
+}
+
+async function convertIngredientToTargetUnit(
+  ingredient: Ingredient,
+  searchPlan: IngredientSearchPlan,
+  targetUnit: ExactUnit
+): Promise<ResolvedIngredientMeasurement | null> {
+  const candidateNames = dedupeQueries([
+    searchPlan.canonicalName,
+    ...searchPlan.searchQueries,
+    ingredient.name,
+  ]);
+
+  for (const ingredientName of candidateNames) {
+    try {
+      const converted = await convertIngredientQuantity({
+        ingredientName,
+        quantity: ingredient.quantity,
+        fromUnit: ingredient.unit,
+        toUnit: targetUnit,
+      });
+      const measurement = toMeasurement(converted.averageValue, converted.toUnit);
+      if (measurement) {
+        return {
+          measurement,
+          usedApproximateDensity: Boolean(converted.source),
+        };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+async function resolveIngredientMeasurement(
+  ingredient: Ingredient,
+  searchPlan: IngredientSearchPlan,
+  targetDimension: MeasurementDimension
+): Promise<ResolvedIngredientMeasurement | null> {
+  const ingredientAmount = parseQuantity(ingredient.quantity);
+  if (ingredientAmount === null || ingredientAmount <= 0) {
+    return null;
+  }
+
+  const baseIngredientMeasure = toMeasurement(ingredientAmount, ingredient.unit, targetDimension);
+  if (baseIngredientMeasure?.dimension === targetDimension) {
+    return {
+      measurement: baseIngredientMeasure,
+      usedApproximateDensity: false,
+    };
+  }
+
+  const candidateUnits: ExactUnit[] = [];
+  const preferredExactUnit = getPricingUnitExactUnit(searchPlan.pricingUnit);
+  if (
+    preferredExactUnit &&
+    getPricingUnitDimension(searchPlan.pricingUnit) === targetDimension
+  ) {
+    candidateUnits.push(preferredExactUnit);
+  }
+
+  if (targetDimension === "weight") {
+    candidateUnits.push("g");
+  } else if (targetDimension === "volume") {
+    candidateUnits.push("ml");
+  }
+
+  for (const targetUnit of [...new Set(candidateUnits)]) {
+    const converted = await convertIngredientToTargetUnit(ingredient, searchPlan, targetUnit);
+    if (converted?.measurement.dimension === targetDimension) {
+      return converted;
+    }
+  }
+
+  if (
+    searchPlan.pricingQuantity !== null &&
+    searchPlan.pricingQuantity > 0 &&
+    getPricingUnitDimension(searchPlan.pricingUnit) === targetDimension
+  ) {
+    const aiMeasurement = toMeasurement(searchPlan.pricingQuantity, searchPlan.pricingUnit);
+    if (aiMeasurement) {
+      return {
+        measurement: aiMeasurement,
+        usedApproximateDensity: true,
+      };
+    }
+  }
+
+  if (!baseIngredientMeasure) {
+    return null;
+  }
+
+  const densityEstimate = getDensityEstimate(ingredient, searchPlan);
+  const densityAdjustedIngredientMeasure =
+    densityEstimate === null
+      ? null
+      : convertMeasurementDimension(baseIngredientMeasure, targetDimension, densityEstimate);
+
+  if (!densityAdjustedIngredientMeasure) {
+    return null;
+  }
+
+  return {
+    measurement: densityAdjustedIngredientMeasure,
+    usedApproximateDensity: true,
+  };
 }
 
 function convertMeasurementDimension(
@@ -1336,6 +1581,7 @@ function parseProductNamePackageMeasurement(productName: string): ProductPackage
 function inferProductQuantityUnit(
   product: OpenPricesProduct,
   ingredient: Ingredient,
+  searchPlan: IngredientSearchPlan,
   preferredDimension?: MeasurementDimension
 ): string | null {
   const unit = sanitizeOptionalText(product.productQuantityUnit);
@@ -1346,6 +1592,10 @@ function inferProductQuantityUnit(
   if (product.productQuantity === null || product.productQuantity <= 0) {
     return null;
   }
+
+  if (searchPlan.pricingUnit === "count") return "count";
+  if (searchPlan.pricingUnit === "ml") return "ml";
+  if (searchPlan.pricingUnit === "g") return "g";
 
   if (preferredDimension === "volume") return "ml";
   if (preferredDimension === "weight") return "g";
@@ -1383,7 +1633,8 @@ function inferProductQuantityUnit(
 
 function buildProductPackageMeasurement(
   product: OpenPricesProduct,
-  ingredient: Ingredient
+  ingredient: Ingredient,
+  searchPlan: IngredientSearchPlan
 ): ProductPackageMeasurement | null {
   const parsedFromName = parseProductNamePackageMeasurement(product.productName);
   if (parsedFromName) {
@@ -1394,8 +1645,14 @@ function buildProductPackageMeasurement(
     return null;
   }
 
-  const preferredDimension = toMeasurement(1, ingredient.unit)?.dimension;
-  const inferredUnit = inferProductQuantityUnit(product, ingredient, preferredDimension);
+  const preferredDimension =
+    getPricingUnitDimension(searchPlan.pricingUnit) ?? toMeasurement(1, ingredient.unit)?.dimension;
+  const inferredUnit = inferProductQuantityUnit(
+    product,
+    ingredient,
+    searchPlan,
+    preferredDimension
+  );
   if (!inferredUnit) {
     return null;
   }
@@ -1408,22 +1665,17 @@ function buildProductPackageMeasurement(
   };
 }
 
-function buildComparableMeasurements(
+async function buildComparableMeasurements(
   ingredient: Ingredient,
-  product: OpenPricesProduct
-): ComparableMeasurements | null {
-  const ingredientAmount = parseQuantity(ingredient.quantity);
-  if (ingredientAmount === null || ingredientAmount <= 0) {
-    return null;
-  }
-
-  const baseIngredientMeasure = toMeasurement(ingredientAmount, ingredient.unit);
-  const packageMeasurement = buildProductPackageMeasurement(product, ingredient);
+  product: OpenPricesProduct,
+  searchPlan: IngredientSearchPlan
+): Promise<ComparableMeasurements | null> {
+  const preferredDimension = getPricingUnitDimension(searchPlan.pricingUnit);
+  const packageMeasurement = buildProductPackageMeasurement(product, ingredient, searchPlan);
   if (!packageMeasurement) {
     return null;
   }
 
-  const preferredDimension = baseIngredientMeasure?.dimension;
   const productMeasure = toMeasurement(
     packageMeasurement.amount,
     packageMeasurement.unit,
@@ -1433,43 +1685,21 @@ function buildComparableMeasurements(
     return null;
   }
 
-  const exactIngredientMeasure =
-    baseIngredientMeasure?.dimension === productMeasure.dimension
-      ? baseIngredientMeasure
-      : baseIngredientMeasure
-        ? null
-        : toMeasurement(ingredientAmount, ingredient.unit, productMeasure.dimension);
-
-  if (exactIngredientMeasure && exactIngredientMeasure.dimension === productMeasure.dimension) {
-    return {
-      ingredientMeasure: exactIngredientMeasure,
-      productMeasure,
-      packageSizeText: packageMeasurement.displayText,
-      inferredUnit: packageMeasurement.inferredUnit,
-      usedApproximateDensity: false,
-    };
-  }
-
-  if (!baseIngredientMeasure) {
-    return null;
-  }
-
-  const densityEstimate = getDensityEstimate(ingredient);
-  const densityAdjustedIngredientMeasure =
-    densityEstimate === null
-      ? null
-      : convertMeasurementDimension(baseIngredientMeasure, productMeasure.dimension, densityEstimate);
-
-  if (!densityAdjustedIngredientMeasure) {
+  const resolvedIngredientMeasure = await resolveIngredientMeasurement(
+    ingredient,
+    searchPlan,
+    productMeasure.dimension
+  );
+  if (!resolvedIngredientMeasure) {
     return null;
   }
 
   return {
-    ingredientMeasure: densityAdjustedIngredientMeasure,
+    ingredientMeasure: resolvedIngredientMeasure.measurement,
     productMeasure,
     packageSizeText: packageMeasurement.displayText,
     inferredUnit: packageMeasurement.inferredUnit,
-    usedApproximateDensity: true,
+    usedApproximateDensity: resolvedIngredientMeasure.usedApproximateDensity,
   };
 }
 
@@ -1564,12 +1794,17 @@ function buildUnavailableEstimate(
   };
 }
 
-function buildScoredProductMatch(
+async function buildScoredProductMatch(
   ingredient: Ingredient,
   preliminary: PreliminaryProductMatch,
-  pricing: OpenPricesProductPricing
-): ScoredProductMatch {
-  const comparableMeasurements = buildComparableMeasurements(ingredient, preliminary.product);
+  pricing: OpenPricesProductPricing,
+  searchPlan: IngredientSearchPlan
+): Promise<ScoredProductMatch> {
+  const comparableMeasurements = await buildComparableMeasurements(
+    ingredient,
+    preliminary.product,
+    searchPlan
+  );
   let finalScore = preliminary.score;
 
   if (pricing.stats.priceCount > 0 && pricing.stats.averagePrice !== null) {
@@ -1652,7 +1887,7 @@ async function estimateIngredientPrice(
     await mapWithConcurrency(preliminaryMatches, PRODUCT_PRICING_LOOKUP_LIMIT, async (match) => {
       const pricing = await getProductPricing(match.product.id);
       if (!pricing) return null;
-      return buildScoredProductMatch(ingredient, match, pricing);
+      return buildScoredProductMatch(ingredient, match, pricing, searchPlan);
     })
   ).filter((match): match is ScoredProductMatch => Boolean(match));
 
