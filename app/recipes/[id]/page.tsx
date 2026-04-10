@@ -290,7 +290,7 @@ export default function RecipeDetailPage() {
   const canShareToMyNetDiary =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
   const pricingSummary =
-    "Estimated from Open Food Facts Open Prices product matches adjusted to this recipe's ingredient quantities.";
+    "Estimated from USDA produce averages and Open Food Facts packaged product matches adjusted to this recipe's ingredient quantities.";
 
   async function copyMyNetDiaryExport() {
     try {
@@ -483,7 +483,7 @@ export default function RecipeDetailPage() {
                     ? ` · ${priceEstimate.unresolvedIngredientCount} need a manual check`
                     : ""
                 } · Updated ${new Date(priceEstimate.estimatedAt).toLocaleString()}`
-              : "Open Food Facts Open Prices results will appear here after the lookup finishes."}
+              : "Grocery pricing results will appear here after the lookup finishes."}
           </p>
         </div>
 

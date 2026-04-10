@@ -24,7 +24,7 @@ export interface IngredientPriceEstimate {
 }
 
 export interface RecipePriceEstimate {
-  provider: "open-food-facts" | "spoonacular";
+  provider: "open-food-facts" | "spoonacular" | "hybrid";
   estimatedAt: string;
   currencyCode: "USD";
   totalAdjustedPrice: number;

@@ -6,6 +6,7 @@ import {
 } from "@/lib/recipePricing";
 import { Ingredient } from "@/lib/types";
 import { convertIngredientQuantity, type ExactUnit } from "@/lib/unitConversion";
+import { estimateProduceIngredientPrice } from "@/lib/usdaProducePricing";
 
 const OPEN_PRICES_API_BASE_URL = "https://prices.openfoodfacts.org/api/v1";
 const OPEN_PRICES_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
@@ -1860,6 +1861,11 @@ async function estimateIngredientPrice(
   ingredient: Ingredient,
   searchPlan: IngredientSearchPlan
 ): Promise<IngredientPriceEstimate> {
+  const usdaProduceEstimate = await estimateProduceIngredientPrice(ingredient, searchPlan);
+  if (usdaProduceEstimate) {
+    return usdaProduceEstimate;
+  }
+
   const products = await searchProducts(searchPlan);
   if (products.length === 0) {
     return buildUnavailableEstimate(
@@ -1963,7 +1969,7 @@ export async function estimateRecipeWithOpenFoodFacts(
 
   if (ingredients.length === 0) {
     return {
-      provider: "open-food-facts",
+      provider: "hybrid",
       estimatedAt: new Date().toISOString(),
       currencyCode: "USD",
       totalAdjustedPrice: 0,
@@ -1990,7 +1996,7 @@ export async function estimateRecipeWithOpenFoodFacts(
   ).length;
 
   return {
-    provider: "open-food-facts",
+    provider: "hybrid",
     estimatedAt: new Date().toISOString(),
     currencyCode: "USD",
     totalAdjustedPrice,
