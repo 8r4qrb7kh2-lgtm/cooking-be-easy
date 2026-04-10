@@ -286,6 +286,7 @@ export default function RecipeDetailPage() {
   if (!recipe) return null;
 
   const myNetDiaryExport = buildMyNetDiaryRecipeExport(recipe);
+  const sourceSteps = recipe.sourceSteps.length > 0 ? recipe.sourceSteps : recipe.steps;
   const canShareToMyNetDiary =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
   const pricingSummary =
@@ -677,21 +678,64 @@ export default function RecipeDetailPage() {
           {showSteps ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
         </button>
         {showSteps && (
-          <>
-            <StepEditor
-              steps={recipe.steps}
-              onChange={updateSteps}
-              emptyLabel="No steps saved yet. Add the first one below."
-            />
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <div className="mb-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Source Steps
+                </p>
+                <p className="mt-1 text-xs text-gray-400">
+                  Read-only snapshot of the imported or original recipe steps.
+                </p>
+              </div>
+              <div className="space-y-2">
+                {sourceSteps.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-500">
+                    No source steps were saved for this recipe.
+                  </div>
+                ) : (
+                  sourceSteps.map((sourceStep, index) => (
+                    <div
+                      key={`${index}-${sourceStep}`}
+                      className="flex items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 p-2.5"
+                    >
+                      <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-bold text-gray-700">
+                        {index + 1}
+                      </span>
+                      <p className="text-sm leading-relaxed text-gray-700">
+                        {sourceStep}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-brand-200 bg-brand-50/30 p-4">
+              <div className="mb-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-brand-700">
+                  Cooking Mode Steps
+                </p>
+                <p className="mt-1 text-xs text-gray-500">
+                  These are the steps used in cooking mode. Edit this column only.
+                </p>
+              </div>
+              <StepEditor
+                steps={recipe.steps}
+                onChange={updateSteps}
+                emptyLabel="No cooking steps saved yet. Add the first one below."
+              />
+            </div>
+
             {dirty && (
               <button
                 onClick={handleSave}
-                className="mt-4 w-full rounded-xl bg-brand-600 py-2.5 font-medium text-white transition-colors hover:bg-brand-700"
+                className="lg:col-span-2 mt-1 w-full rounded-xl bg-brand-600 py-2.5 font-medium text-white transition-colors hover:bg-brand-700"
               >
                 Save changes
               </button>
             )}
-          </>
+          </div>
         )}
       </div>
 

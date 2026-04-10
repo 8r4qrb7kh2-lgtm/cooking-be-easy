@@ -27,6 +27,7 @@ export interface Recipe {
   id: string;
   name: string;
   ingredients: Ingredient[];
+  sourceSteps: string[];
   steps: string[];
   notes: string;
   rating?: number; // 1-5 stars

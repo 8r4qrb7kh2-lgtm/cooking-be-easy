@@ -31,23 +31,88 @@ async function getHouseholdId(): Promise<string | null> {
   return data?.household_id ?? null;
 }
 
+function collectStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function parseRecipeStepsField(value: unknown): {
+  sourceSteps: string[];
+  steps: string[];
+  normalizedStepsChanged: boolean;
+} {
+  if (Array.isArray(value)) {
+    const originalSteps = collectStringArray(value);
+    const normalizedSteps = normalizeRecipeSteps(originalSteps);
+    const normalizedStepsChanged =
+      normalizedSteps.length !== originalSteps.length ||
+      normalizedSteps.some((step, index) => step !== originalSteps[index]);
+
+    return {
+      sourceSteps: normalizedSteps,
+      steps: normalizedSteps,
+      normalizedStepsChanged,
+    };
+  }
+
+  if (value && typeof value === "object") {
+    const candidate = value as Record<string, unknown>;
+    const originalSourceSteps = collectStringArray(candidate.source);
+    const originalCookingSteps = collectStringArray(candidate.cooking);
+
+    const normalizedSourceSteps = normalizeRecipeSteps(originalSourceSteps);
+    const normalizedCookingSteps = normalizeRecipeSteps(
+      originalCookingSteps.length > 0 ? originalCookingSteps : originalSourceSteps
+    );
+
+    const normalizedStepsChanged =
+      normalizedSourceSteps.length !== originalSourceSteps.length ||
+      normalizedSourceSteps.some((step, index) => step !== originalSourceSteps[index]) ||
+      normalizedCookingSteps.length !== originalCookingSteps.length ||
+      normalizedCookingSteps.some((step, index) => step !== originalCookingSteps[index]) ||
+      originalCookingSteps.length === 0;
+
+    return {
+      sourceSteps: normalizedSourceSteps,
+      steps: normalizedCookingSteps,
+      normalizedStepsChanged,
+    };
+  }
+
+  return {
+    sourceSteps: [],
+    steps: [],
+    normalizedStepsChanged: false,
+  };
+}
+
+function serializeRecipeSteps(recipe: Pick<Recipe, "sourceSteps" | "steps">) {
+  const normalizedSourceSteps = normalizeRecipeSteps(
+    Array.isArray(recipe.sourceSteps) ? recipe.sourceSteps : recipe.steps
+  );
+  const normalizedCookingSteps = normalizeRecipeSteps(recipe.steps);
+
+  return {
+    source: normalizedSourceSteps,
+    cooking:
+      normalizedCookingSteps.length > 0 ? normalizedCookingSteps : normalizedSourceSteps,
+  };
+}
+
 function mapRecipeRow(row: any): {
   recipe: Recipe;
   normalizedStepsChanged: boolean;
 } {
-  const rawSteps = Array.isArray(row.steps) ? row.steps : [];
-  const originalSteps = rawSteps.filter((step: unknown): step is string => typeof step === "string");
-  const normalizedSteps = normalizeRecipeSteps(originalSteps);
-  const normalizedStepsChanged =
-    normalizedSteps.length !== originalSteps.length ||
-    normalizedSteps.some((step, index) => step !== originalSteps[index]);
+  const parsedSteps = parseRecipeStepsField(row.steps);
 
   return {
     recipe: {
       id: row.id,
       name: row.name,
       ingredients: row.ingredients as Recipe["ingredients"],
-      steps: normalizedSteps,
+      sourceSteps: parsedSteps.sourceSteps,
+      steps: parsedSteps.steps,
       notes: typeof row.notes === "string" ? row.notes : "",
       rating: parseOptionalNumber(row.rating),
       servingsYielded: parseOptionalNumber(row.servings_yielded),
@@ -57,7 +122,7 @@ function mapRecipeRow(row: any): {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     },
-    normalizedStepsChanged,
+    normalizedStepsChanged: parsedSteps.normalizedStepsChanged,
   };
 }
 
@@ -79,7 +144,7 @@ export async function getRecipes(): Promise<Recipe[]> {
       supabase
         .from("recipes")
         .update({
-          steps: item.recipe.steps,
+          steps: serializeRecipeSteps(item.recipe),
           updated_at: item.recipe.updatedAt,
         })
         .eq("id", item.recipe.id)
@@ -115,7 +180,7 @@ export async function getRecipe(id: string): Promise<Recipe | undefined> {
     await supabase
       .from("recipes")
       .update({
-        steps: mapped.recipe.steps,
+        steps: serializeRecipeSteps(mapped.recipe),
         updated_at: mapped.recipe.updatedAt,
       })
       .eq("id", mapped.recipe.id);
@@ -127,13 +192,13 @@ export async function getRecipe(id: string): Promise<Recipe | undefined> {
 export async function saveRecipe(recipe: Recipe): Promise<void> {
   const supabase = getSupabase();
   const userId = await getUserId();
-  const normalizedSteps = normalizeRecipeSteps(recipe.steps);
+  const serializedSteps = serializeRecipeSteps(recipe);
   const { error } = await supabase.from("recipes").upsert({
     id: recipe.id,
     user_id: userId,
     name: recipe.name,
     ingredients: recipe.ingredients,
-    steps: normalizedSteps,
+    steps: serializedSteps,
     notes: recipe.notes,
     rating: recipe.rating ?? null,
     servings_yielded: recipe.servingsYielded ?? null,

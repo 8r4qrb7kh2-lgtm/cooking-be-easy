@@ -19,7 +19,13 @@ export async function migrateLocalStorageToSupabase(): Promise<void> {
 
     // Migrate recipes
     for (const recipe of state.recipes || []) {
-      await saveRecipe(recipe);
+      const legacyRecipe = recipe as typeof recipe & { sourceSteps?: string[] };
+      await saveRecipe({
+        ...recipe,
+        sourceSteps: Array.isArray(legacyRecipe.sourceSteps)
+          ? legacyRecipe.sourceSteps
+          : recipe.steps,
+      });
     }
 
     // Migrate weekly plan

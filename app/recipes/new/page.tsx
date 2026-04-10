@@ -24,6 +24,7 @@ export default function NewRecipePage() {
   const [urlInput, setUrlInput] = useState("");
   const [sourceUrl, setSourceUrl] = useState<string | undefined>();
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+  const [sourceSteps, setSourceSteps] = useState<string[]>([]);
   const [steps, setSteps] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
@@ -57,7 +58,9 @@ export default function NewRecipePage() {
           })
         )
       );
-      setSteps(normalizeRecipeSteps(data.steps || []));
+      const normalizedSteps = normalizeRecipeSteps(data.steps || []);
+      setSourceSteps(normalizedSteps);
+      setSteps(normalizedSteps);
       setStep("review");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to analyze image");
@@ -94,7 +97,9 @@ export default function NewRecipePage() {
           })
         )
       );
-      setSteps(normalizeRecipeSteps(data.steps || []));
+      const normalizedSteps = normalizeRecipeSteps(data.steps || []);
+      setSourceSteps(normalizedSteps);
+      setSteps(normalizedSteps);
       setSourceUrl(urlInput.trim());
       setStep("review");
     } catch (e) {
@@ -109,6 +114,7 @@ export default function NewRecipePage() {
       id: uuidv4(),
       name: name.trim(),
       ingredients,
+      sourceSteps: sourceSteps.length > 0 ? sourceSteps : steps,
       steps,
       notes,
       dishPhotos: [],
