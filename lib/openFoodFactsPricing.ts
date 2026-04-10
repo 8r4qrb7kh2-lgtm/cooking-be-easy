@@ -1,3 +1,4 @@
+import Anthropic from "@anthropic-ai/sdk";
 import {
   IngredientPriceEstimate,
   RecipePriceEstimate,
@@ -11,10 +12,15 @@ const OPEN_PRICES_USER_AGENT =
   "cooking-be-easy/1.0 (recipe pricing lookup; https://cooking-be-easy.vercel.app)";
 const PRODUCT_SEARCH_LIMIT = 10;
 const PRODUCT_PRICING_LOOKUP_LIMIT = 3;
+const SEARCH_QUERY_LIMIT = 4;
+
+const anthropic = process.env.ANTHROPIC_API_KEY?.trim() ? new Anthropic() : null;
 
 const SEARCH_CLEANUP_PATTERNS = [
   /\([^)]*\)/g,
   /\bfor serving\b/gi,
+  /\bfor garnish\b/gi,
+  /\bfor the garnish\b/gi,
   /\bdivided\b/gi,
   /\bto taste\b/gi,
   /\bplus more\b[\w\s-]*/gi,
@@ -26,6 +32,54 @@ const SEARCH_CLEANUP_PATTERNS = [
   /\bcoarsely\b/gi,
   /[,+/]/g,
 ] as const;
+
+const HEURISTIC_QUERY_REPLACEMENTS: Array<{ pattern: RegExp; queries: string[] }> = [
+  {
+    pattern: /\bscallions?\b/i,
+    queries: ["scallions", "green onions", "spring onions"],
+  },
+  {
+    pattern: /\bgreen onions?\b/i,
+    queries: ["green onions", "scallions", "spring onions"],
+  },
+  {
+    pattern: /\bspring onions?\b/i,
+    queries: ["spring onions", "scallions", "green onions"],
+  },
+  {
+    pattern: /\bchili flakes?\b/i,
+    queries: ["red chili flakes", "chili flakes", "red pepper flakes", "crushed red pepper"],
+  },
+  {
+    pattern: /\bred pepper flakes?\b/i,
+    queries: ["red pepper flakes", "red chili flakes", "chili flakes", "crushed red pepper"],
+  },
+  {
+    pattern: /\bneutral oil\b/i,
+    queries: ["avocado oil", "vegetable oil", "canola oil", "neutral oil"],
+  },
+  {
+    pattern: /\ball purpose flour\b/i,
+    queries: ["all purpose flour", "all-purpose flour", "plain flour", "flour"],
+  },
+  {
+    pattern: /\bcaster sugar\b/i,
+    queries: ["caster sugar", "superfine sugar", "sugar"],
+  },
+  {
+    pattern: /\bconfectioners?(?:'|) sugar\b/i,
+    queries: ["powdered sugar", "confectioners sugar", "icing sugar"],
+  },
+];
+
+const PARENTHETICAL_QUERY_HINT_PATTERNS = [
+  /\b([a-z][a-z\s-]{1,30}\s+oil)\b/i,
+  /\b([a-z][a-z\s-]{1,30}\s+vinegar)\b/i,
+  /\b([a-z][a-z\s-]{1,30}\s+flour)\b/i,
+  /\b([a-z][a-z\s-]{1,30}\s+sauce)\b/i,
+  /\b([a-z][a-z\s-]{1,30}\s+sugar)\b/i,
+  /\b([a-z][a-z\s-]{1,30}\s+flakes)\b/i,
+];
 
 const TOKEN_STOPWORDS = new Set([
   "a",
@@ -79,6 +133,9 @@ const PREPARED_PRODUCT_HINTS = [
   "soups",
   "toaster-pastries",
   "fried",
+  "mayonnaise",
+  "mayo",
+  "spread",
 ];
 
 const LIQUID_PRODUCT_HINTS = [
@@ -314,6 +371,10 @@ const productPricingCache = new Map<
   number,
   { expiresAt: number; value: Promise<OpenPricesProductPricing | null> }
 >();
+const ingredientSearchPlanCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<Map<string, IngredientSearchPlan>> }
+>();
 
 type MeasurementDimension = "count" | "volume" | "weight";
 
@@ -381,6 +442,12 @@ interface ScoredProductMatch extends PreliminaryProductMatch {
   pricing: OpenPricesProductPricing;
   comparableMeasurements: ComparableMeasurements | null;
   finalScore: number;
+}
+
+interface IngredientSearchPlan {
+  ingredientId: string;
+  canonicalName: string;
+  searchQueries: string[];
 }
 
 export class PricingRouteError extends Error {
@@ -484,6 +551,248 @@ function buildSearchQuery(ingredientName: string): string {
   );
 
   return cleanText(cleaned) || cleanText(ingredientName);
+}
+
+function normalizeSearchTerm(value: string): string {
+  return cleanText(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, " ")
+      .replace(/\s+/g, " ")
+  );
+}
+
+function dedupeQueries(values: string[]): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+
+  for (const value of values) {
+    const normalized = normalizeSearchTerm(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    output.push(normalized);
+  }
+
+  return output;
+}
+
+function extractParentheticalSearchHints(ingredientName: string): string[] {
+  const hints: string[] = [];
+  const matches = ingredientName.match(/\(([^)]+)\)/g) ?? [];
+
+  for (const rawMatch of matches) {
+    const inner = rawMatch.slice(1, -1);
+    for (const pattern of PARENTHETICAL_QUERY_HINT_PATTERNS) {
+      const match = inner.match(pattern);
+      if (match?.[1]) {
+        hints.push(match[1]);
+      }
+    }
+  }
+
+  return hints;
+}
+
+function buildHeuristicSearchPlan(ingredient: Ingredient): IngredientSearchPlan {
+  const baseQuery = buildSearchQuery(ingredient.name);
+  const queries = [baseQuery, ...extractParentheticalSearchHints(ingredient.name)];
+
+  for (const replacement of HEURISTIC_QUERY_REPLACEMENTS) {
+    if (replacement.pattern.test(ingredient.name) || replacement.pattern.test(baseQuery)) {
+      queries.unshift(...replacement.queries);
+    }
+  }
+
+  const dedupedQueries = dedupeQueries(queries).slice(0, SEARCH_QUERY_LIMIT);
+  const canonicalName = dedupedQueries[0] || normalizeSearchTerm(baseQuery) || "ingredient";
+
+  return {
+    ingredientId: ingredient.id,
+    canonicalName,
+    searchQueries: dedupedQueries.length > 0 ? dedupedQueries : [canonicalName],
+  };
+}
+
+function getIngredientSearchPlanCacheKey(ingredients: Ingredient[]): string {
+  return ingredients
+    .map((ingredient) =>
+      [
+        ingredient.id,
+        normalizeSearchTerm(ingredient.name),
+        normalizeSearchTerm(ingredient.section),
+        normalizeSearchTerm(ingredient.unit),
+      ].join(":")
+    )
+    .join("|");
+}
+
+function parseIngredientSearchPlansResponse(
+  text: string,
+  ingredients: Ingredient[]
+): Map<string, IngredientSearchPlan> {
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error("Could not parse ingredient search plans");
+  }
+
+  const parsed = JSON.parse(jsonMatch[0]) as {
+    plans?: Array<{
+      ingredientId?: unknown;
+      canonicalName?: unknown;
+      searchQueries?: unknown;
+    }>;
+  };
+
+  const ingredientIds = new Set(ingredients.map((ingredient) => ingredient.id));
+  const plans = new Map<string, IngredientSearchPlan>();
+
+  if (!Array.isArray(parsed.plans)) {
+    return plans;
+  }
+
+  for (const entry of parsed.plans) {
+    if (!entry || typeof entry !== "object") continue;
+    if (typeof entry.ingredientId !== "string" || !ingredientIds.has(entry.ingredientId)) {
+      continue;
+    }
+
+    const canonicalName =
+      typeof entry.canonicalName === "string"
+        ? normalizeSearchTerm(entry.canonicalName)
+        : "";
+    const searchQueries = Array.isArray(entry.searchQueries)
+      ? dedupeQueries(
+          entry.searchQueries.filter(
+            (query): query is string => typeof query === "string"
+          )
+        )
+      : [];
+
+    if (!canonicalName && searchQueries.length === 0) {
+      continue;
+    }
+
+    plans.set(entry.ingredientId, {
+      ingredientId: entry.ingredientId,
+      canonicalName: canonicalName || searchQueries[0],
+      searchQueries: (searchQueries.length > 0 ? searchQueries : [canonicalName]).slice(
+        0,
+        SEARCH_QUERY_LIMIT
+      ),
+    });
+  }
+
+  return plans;
+}
+
+async function inferIngredientSearchPlansWithAi(
+  ingredients: Ingredient[]
+): Promise<Map<string, IngredientSearchPlan>> {
+  if (!anthropic || ingredients.length === 0) {
+    return new Map();
+  }
+
+  const cacheKey = getIngredientSearchPlanCacheKey(ingredients);
+
+  return getCachedPromise(ingredientSearchPlanCache, cacheKey, async () => {
+    const message = await anthropic.messages.create({
+      model: "claude-sonnet-4-5-20250929",
+      max_tokens: 2048,
+      messages: [
+        {
+          role: "user",
+          content: `Turn these recipe ingredients into grocery search plans for Open Food Facts Open Prices.
+
+Each ingredient needs:
+- canonicalName: the short, generic grocery item name
+- searchQueries: 2 to 4 short search phrases, ordered best to fallback
+
+Rules:
+- Remove prep notes, garnish notes, and cooking instructions.
+- Keep the actual grocery item identity.
+- Prefer the most likely specific product if the ingredient suggests one in parentheses.
+- Use lowercase only.
+- Queries must be short grocery phrases, not sentences.
+- Do not include quantities, units, brand names, or packaging sizes.
+- Include common grocery synonyms when they help:
+  - scallions -> green onions / spring onions
+  - chili flakes -> red pepper flakes / red chili flakes
+  - neutral oil -> avocado oil / vegetable oil / canola oil
+- Do not invent exotic substitutes. Keep it practical for grocery-store product search.
+
+Ingredients:
+${JSON.stringify(
+  ingredients.map((ingredient) => ({
+    ingredientId: ingredient.id,
+    name: ingredient.name,
+    quantity: ingredient.quantity,
+    unit: ingredient.unit,
+    section: ingredient.section,
+  })),
+  null,
+  2
+)}
+
+Return ONLY valid JSON in exactly this format:
+{
+  "plans": [
+    {
+      "ingredientId": "id",
+      "canonicalName": "generic grocery item",
+      "searchQueries": ["best query", "fallback query"]
+    }
+  ]
+}`,
+        },
+      ],
+    });
+
+    const textBlock = message.content.find((block) => block.type === "text");
+    const text = textBlock ? textBlock.text : "";
+    return parseIngredientSearchPlansResponse(text, ingredients);
+  });
+}
+
+async function buildIngredientSearchPlans(
+  ingredients: Ingredient[]
+): Promise<Map<string, IngredientSearchPlan>> {
+  const heuristicPlans = new Map(
+    ingredients.map((ingredient) => [ingredient.id, buildHeuristicSearchPlan(ingredient)])
+  );
+
+  let aiPlans = new Map<string, IngredientSearchPlan>();
+  try {
+    aiPlans = await inferIngredientSearchPlansWithAi(ingredients);
+  } catch (error) {
+    console.error("Ingredient search plan normalization failed:", error);
+  }
+
+  const mergedPlans = new Map<string, IngredientSearchPlan>();
+
+  for (const ingredient of ingredients) {
+    const heuristicPlan = heuristicPlans.get(ingredient.id) ?? buildHeuristicSearchPlan(ingredient);
+    const aiPlan = aiPlans.get(ingredient.id);
+
+    if (!aiPlan) {
+      mergedPlans.set(ingredient.id, heuristicPlan);
+      continue;
+    }
+
+    const searchQueries = dedupeQueries([
+      ...aiPlan.searchQueries,
+      aiPlan.canonicalName,
+      ...heuristicPlan.searchQueries,
+      heuristicPlan.canonicalName,
+    ]).slice(0, SEARCH_QUERY_LIMIT);
+
+    mergedPlans.set(ingredient.id, {
+      ingredientId: ingredient.id,
+      canonicalName: aiPlan.canonicalName || heuristicPlan.canonicalName,
+      searchQueries: searchQueries.length > 0 ? searchQueries : heuristicPlan.searchQueries,
+    });
+  }
+
+  return mergedPlans;
 }
 
 function tokenize(value: string): string[] {
@@ -806,12 +1115,12 @@ async function fetchOpenPricesJson(url: string): Promise<unknown> {
   return payload;
 }
 
-async function searchProducts(ingredient: Ingredient): Promise<OpenPricesProduct[]> {
-  const query = buildSearchQuery(ingredient.name);
+async function searchProductsForQuery(query: string): Promise<OpenPricesProduct[]> {
+  const normalizedQuery = normalizeSearchTerm(query);
 
-  return getCachedPromise(productSearchCache, query.toLowerCase(), async () => {
+  return getCachedPromise(productSearchCache, normalizedQuery, async () => {
     const searchParams = new URLSearchParams({
-      product_name__like: query,
+      product_name__like: normalizedQuery,
       price_count__gte: "1",
       size: String(PRODUCT_SEARCH_LIMIT),
     });
@@ -822,6 +1131,25 @@ async function searchProducts(ingredient: Ingredient): Promise<OpenPricesProduct
 
     return parseProductList(payload);
   });
+}
+
+async function searchProducts(searchPlan: IngredientSearchPlan): Promise<OpenPricesProduct[]> {
+  const results = await mapWithConcurrency(
+    searchPlan.searchQueries.slice(0, SEARCH_QUERY_LIMIT),
+    2,
+    (query) => searchProductsForQuery(query)
+  );
+
+  const productsById = new Map<number, OpenPricesProduct>();
+  for (const group of results) {
+    for (const product of group) {
+      if (!productsById.has(product.id)) {
+        productsById.set(product.id, product);
+      }
+    }
+  }
+
+  return Array.from(productsById.values());
 }
 
 async function getProductPricing(productId: number): Promise<OpenPricesProductPricing | null> {
@@ -895,35 +1223,72 @@ function scoreSectionBonus(ingredient: Ingredient, product: OpenPricesProduct): 
   return includesHint(haystacks, hints) ? 2 : 0;
 }
 
+function buildSearchPlanText(searchPlan: IngredientSearchPlan): string {
+  return searchPlan.searchQueries.join(" / ");
+}
+
 function buildPreliminaryProductMatch(
   ingredient: Ingredient,
-  product: OpenPricesProduct
+  product: OpenPricesProduct,
+  searchPlan: IngredientSearchPlan
 ): PreliminaryProductMatch | null {
-  const ingredientQuery = buildSearchQuery(ingredient.name);
-  const ingredientTokens = tokenize(ingredientQuery);
+  const ingredientQueries = dedupeQueries([
+    searchPlan.canonicalName,
+    ...searchPlan.searchQueries,
+    buildSearchQuery(ingredient.name),
+  ]);
   const searchText = buildProductSearchText(product);
 
-  if (ingredientTokens.length === 0) return null;
+  let bestMatchedTokenCount = 0;
+  let bestTokenCoverage = 0;
+  let bestExactPhraseMatch = false;
+  let bestNormalizedQuery = "";
 
-  const matchedTokenCount = countMatchingTokens(ingredientTokens, searchText);
-  if (matchedTokenCount === 0) return null;
+  for (const ingredientQuery of ingredientQueries) {
+    const ingredientTokens = tokenize(ingredientQuery);
+    if (ingredientTokens.length === 0) continue;
 
-  const tokenCoverage = matchedTokenCount / ingredientTokens.length;
-  const normalizedIngredientQuery = normalizeText(ingredientQuery);
+    const matchedTokenCount = countMatchingTokens(ingredientTokens, searchText);
+    if (matchedTokenCount === 0) continue;
+
+    const tokenCoverage = matchedTokenCount / ingredientTokens.length;
+    const normalizedIngredientQuery = normalizeText(ingredientQuery);
+    const exactPhraseMatch = searchText.includes(normalizedIngredientQuery);
+
+    if (
+      tokenCoverage > bestTokenCoverage ||
+      (tokenCoverage === bestTokenCoverage && matchedTokenCount > bestMatchedTokenCount) ||
+      (tokenCoverage === bestTokenCoverage &&
+        matchedTokenCount === bestMatchedTokenCount &&
+        exactPhraseMatch &&
+        !bestExactPhraseMatch)
+    ) {
+      bestMatchedTokenCount = matchedTokenCount;
+      bestTokenCoverage = tokenCoverage;
+      bestExactPhraseMatch = exactPhraseMatch;
+      bestNormalizedQuery = normalizedIngredientQuery;
+    }
+  }
+
+  if (bestMatchedTokenCount === 0) return null;
+
   const normalizedProductName = normalizeText(product.productName);
-  const exactPhraseMatch = normalizedProductName.includes(normalizedIngredientQuery);
-  const productTokenPenalty = Math.max(0, tokenize(product.productName).length - matchedTokenCount - 2) * 1.2;
+  const exactPhraseMatch = bestExactPhraseMatch;
+  const productTokenPenalty =
+    Math.max(0, tokenize(product.productName).length - bestMatchedTokenCount - 2) * 1.2;
   const sectionBonus = scoreSectionBonus(ingredient, product);
 
-  let score = matchedTokenCount * 4 + tokenCoverage * 4 - productTokenPenalty + sectionBonus;
+  let score =
+    bestMatchedTokenCount * 4 + bestTokenCoverage * 4 - productTokenPenalty + sectionBonus;
 
   if (exactPhraseMatch) {
     score += 3;
   }
 
   if (
-    normalizedProductName.startsWith(normalizedIngredientQuery) ||
-    normalizedProductName.endsWith(normalizedIngredientQuery)
+    bestNormalizedQuery &&
+    (normalizedProductName.startsWith(bestNormalizedQuery) ||
+      normalizedProductName.endsWith(bestNormalizedQuery))
   ) {
     score += 1.5;
   }
@@ -944,7 +1309,7 @@ function buildPreliminaryProductMatch(
   return {
     product,
     score,
-    tokenCoverage,
+    tokenCoverage: bestTokenCoverage,
     exactPhraseMatch,
     sectionBonus,
   };
@@ -1159,11 +1524,14 @@ async function mapWithConcurrency<T, R>(
 function buildUnavailableEstimate(
   ingredient: Ingredient,
   reason: string,
+  searchPlan: IngredientSearchPlan,
   match?: ScoredProductMatch
 ): IngredientPriceEstimate {
   const packagePrice = match?.pricing.stats.averagePrice
     ? roundToCents(match.pricing.stats.averagePrice)
     : null;
+  const searchPlanText = buildSearchPlanText(searchPlan);
+  const reasonWithSearch = searchPlanText ? `${reason} Searched: ${searchPlanText}.` : reason;
 
   return {
     ingredientId: ingredient.id,
@@ -1192,7 +1560,7 @@ function buildUnavailableEstimate(
           match.pricing.stats.priceCount === 1 ? "" : "s"
         }${match.pricing.latestPrice?.storeName ? ` · Latest at ${match.pricing.latestPrice.storeName}` : ""}`
       : undefined,
-    unavailableReason: reason,
+    unavailableReason: reasonWithSearch,
   };
 }
 
@@ -1253,17 +1621,21 @@ function buildScoredProductMatch(
   };
 }
 
-async function estimateIngredientPrice(ingredient: Ingredient): Promise<IngredientPriceEstimate> {
-  const products = await searchProducts(ingredient);
+async function estimateIngredientPrice(
+  ingredient: Ingredient,
+  searchPlan: IngredientSearchPlan
+): Promise<IngredientPriceEstimate> {
+  const products = await searchProducts(searchPlan);
   if (products.length === 0) {
     return buildUnavailableEstimate(
       ingredient,
-      "Open Food Facts Open Prices did not return a usable grocery product for this ingredient."
+      "Open Food Facts Open Prices did not return a usable grocery product for this ingredient.",
+      searchPlan
     );
   }
 
   const preliminaryMatches = products
-    .map((product) => buildPreliminaryProductMatch(ingredient, product))
+    .map((product) => buildPreliminaryProductMatch(ingredient, product, searchPlan))
     .filter((match): match is PreliminaryProductMatch => Boolean(match))
     .sort((left, right) => right.score - left.score)
     .slice(0, PRODUCT_PRICING_LOOKUP_LIMIT);
@@ -1271,7 +1643,8 @@ async function estimateIngredientPrice(ingredient: Ingredient): Promise<Ingredie
   if (preliminaryMatches.length === 0) {
     return buildUnavailableEstimate(
       ingredient,
-      "Open Food Facts Open Prices did not return a confident grocery match for this ingredient."
+      "Open Food Facts Open Prices did not return a confident grocery match for this ingredient.",
+      searchPlan
     );
   }
 
@@ -1286,7 +1659,8 @@ async function estimateIngredientPrice(ingredient: Ingredient): Promise<Ingredie
   if (scoredMatches.length === 0) {
     return buildUnavailableEstimate(
       ingredient,
-      "Open Food Facts Open Prices did not return any recent USD price data for this ingredient."
+      "Open Food Facts Open Prices did not return any recent USD price data for this ingredient.",
+      searchPlan
     );
   }
 
@@ -1296,6 +1670,7 @@ async function estimateIngredientPrice(ingredient: Ingredient): Promise<Ingredie
     return buildUnavailableEstimate(
       ingredient,
       "Open Food Facts Open Prices did not return a confident grocery match for this ingredient.",
+      searchPlan,
       bestMatch
     );
   }
@@ -1305,6 +1680,7 @@ async function estimateIngredientPrice(ingredient: Ingredient): Promise<Ingredie
     return buildUnavailableEstimate(
       ingredient,
       "Open Food Facts found a product, but its package size could not be converted to this recipe quantity automatically.",
+      searchPlan,
       bestMatch
     );
   }
@@ -1363,8 +1739,12 @@ export async function estimateRecipeWithOpenFoodFacts(
     };
   }
 
+  const searchPlans = await buildIngredientSearchPlans(ingredients);
   const estimates = await mapWithConcurrency(ingredients, 4, (ingredient) =>
-    estimateIngredientPrice(ingredient)
+    estimateIngredientPrice(
+      ingredient,
+      searchPlans.get(ingredient.id) ?? buildHeuristicSearchPlan(ingredient)
+    )
   );
 
   const totalAdjustedPrice = roundToCents(
