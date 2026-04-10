@@ -62,10 +62,10 @@ npm run dev
 
 ## Grocery Pricing Notes
 
-- Recipe detail pricing uses [Open Food Facts Open Prices](https://prices.openfoodfacts.org/api/docs) packaged grocery data, so no browser location permission is required.
+- Recipe detail pricing uses Walmart grocery search results for packaged items plus USDA produce averages, so no browser location permission is required.
 - No extra pricing API key is needed for recipe detail estimates.
 - The app caches recipe price estimates for 12 hours to reduce repeat API usage.
-- Open Food Facts requests should always use a custom `User-Agent` and follow their [API usage conditions](https://support.openfoodfacts.org/help/en-gb/12-api-data-reuse/94-are-there-conditions-to-use-the-api).
+- Walmart-backed estimates are scraped from server-side search-result HTML and can vary with Walmart's currently returned assortment and pricing.
 
 ## Data Storage
 

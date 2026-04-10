@@ -8,10 +8,11 @@ import { Ingredient } from "@/lib/types";
 import { convertIngredientQuantity, type ExactUnit } from "@/lib/unitConversion";
 import { estimateProduceIngredientPrice } from "@/lib/usdaProducePricing";
 
-const OPEN_PRICES_API_BASE_URL = "https://prices.openfoodfacts.org/api/v1";
 const OPEN_PRICES_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
-const OPEN_PRICES_USER_AGENT =
-  "cooking-be-easy/1.0 (recipe pricing lookup; https://cooking-be-easy.vercel.app)";
+const WALMART_SEARCH_BASE_URL = "https://www.walmart.com/search";
+const WALMART_ORIGIN = "https://www.walmart.com";
+const WALMART_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36";
 const PRODUCT_SEARCH_LIMIT = 10;
 const PRODUCT_PRICING_LOOKUP_LIMIT = 3;
 const SEARCH_QUERY_LIMIT = 4;
@@ -257,6 +258,7 @@ const COUNT_UNITS = new Set([
   "packages",
   "pack",
   "packs",
+  "pk",
   "packet",
   "packets",
   "piece",
@@ -409,6 +411,7 @@ interface OpenPricesProduct {
   categoriesTags: string[];
   brands?: string;
   priceCount: number;
+  packagePrice: number | null;
 }
 
 interface OpenPricesStats {
@@ -784,7 +787,7 @@ async function inferIngredientSearchPlansWithAi(
       messages: [
         {
           role: "user",
-          content: `Turn these recipe ingredients into grocery search plans for Open Food Facts Open Prices.
+          content: `Turn these recipe ingredients into grocery search plans for Walmart grocery search results.
 
 Each ingredient needs:
 - canonicalName: the short, generic grocery item name
@@ -799,7 +802,9 @@ Rules:
 - Use lowercase only.
 - Queries must be short grocery phrases, not sentences.
 - Do not include quantities, units, brand names, or packaging sizes.
-- Open Prices package sizes are usually metric. Use:
+- Use search phrases that are likely to return normal US grocery products on Walmart.
+- Package sizes on Walmart may be count-based or use US customary units. Focus the query on the grocery item identity, not the package size.
+- Use:
   - "ml" for liquids like oils, milks, broths, juices, vinegars, and pourable sauces
   - "g" for solids, powders, spices, pastes, spreads, purées, and thick condiments
   - "count" for discrete produce or packaged items usually bought by piece, bunch, bulb, can, jar, or package
@@ -1239,143 +1244,224 @@ function formatPackageSize(amount: number, unit: string): string {
   return `${printableAmount} ${cleanText(unit)}`;
 }
 
+function buildStoreProductUrl(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  return /^https?:\/\//i.test(path) ? path : `${WALMART_ORIGIN}${path}`;
+}
+
+function parseUsdPriceText(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value > 0 ? roundToCents(value) : null;
+  }
+
+  if (typeof value !== "string") return null;
+
+  const normalized = cleanText(value).replace(/,/g, "");
+  if (!normalized) return null;
+
+  const centsMatch = normalized.match(/(\d+(?:\.\d+)?)\s*¢/);
+  if (centsMatch) {
+    const parsed = Number(centsMatch[1]);
+    return Number.isFinite(parsed) && parsed > 0 ? roundToCents(parsed / 100) : null;
+  }
+
+  const dollarsMatch = normalized.match(/\$?\s*(\d+(?:\.\d+)?)/);
+  if (!dollarsMatch) return null;
+
+  const parsed = Number(dollarsMatch[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? roundToCents(parsed) : null;
+}
+
 function parseProduct(input: unknown): OpenPricesProduct | null {
   if (!input || typeof input !== "object") return null;
 
   const candidate = input as Record<string, unknown>;
-  const id = sanitizeOptionalInteger(candidate.id);
-  const productName = sanitizeOptionalText(candidate.product_name);
-  if (id === null || id <= 0 || !productName) return null;
+  const id = sanitizeOptionalInteger(candidate.usItemId) ?? sanitizeOptionalInteger(candidate.id);
+  const productName = sanitizeOptionalText(candidate.name);
+  const priceInfo =
+    candidate.priceInfo && typeof candidate.priceInfo === "object"
+      ? (candidate.priceInfo as Record<string, unknown>)
+      : undefined;
+  const packagePrice =
+    sanitizeOptionalNumber(candidate.price) ??
+    parseUsdPriceText(priceInfo?.linePriceDisplay) ??
+    parseUsdPriceText(priceInfo?.linePrice) ??
+    parseUsdPriceText(priceInfo?.itemPrice);
+
+  if (id === null || id <= 0 || !productName || packagePrice === null || packagePrice <= 0) {
+    return null;
+  }
+
+  const parsedPackage = parseProductNamePackageMeasurement(productName);
+  const categoriesTags = dedupeQueries([
+    sanitizeOptionalText(candidate.catalogProductType) ?? "",
+    sanitizeOptionalText(candidate.salesUnitType) ?? "",
+  ]);
 
   return {
     id,
-    code: sanitizeOptionalText(candidate.code),
+    code: sanitizeOptionalText(candidate.canonicalUrl),
     productName,
-    productQuantity: sanitizeOptionalNumber(candidate.product_quantity),
-    productQuantityUnit: sanitizeOptionalText(candidate.product_quantity_unit),
-    categoriesTags: sanitizeStringArray(candidate.categories_tags),
-    brands: sanitizeOptionalText(candidate.brands),
-    priceCount: sanitizeOptionalInteger(candidate.price_count) ?? 0,
+    productQuantity: parsedPackage?.amount ?? null,
+    productQuantityUnit: parsedPackage?.unit,
+    categoriesTags,
+    brands:
+      sanitizeOptionalText(candidate.brand) ??
+      sanitizeOptionalText(candidate.manufacturerName),
+    priceCount: 1,
+    packagePrice,
   };
+}
+
+function extractWalmartResultItems(payload: unknown): unknown[] {
+  if (!payload || typeof payload !== "object") return [];
+
+  const root = payload as Record<string, unknown>;
+  const props =
+    root.props && typeof root.props === "object"
+      ? (root.props as Record<string, unknown>)
+      : undefined;
+  const pageProps =
+    props?.pageProps && typeof props.pageProps === "object"
+      ? (props.pageProps as Record<string, unknown>)
+      : undefined;
+  const initialData =
+    pageProps?.initialData && typeof pageProps.initialData === "object"
+      ? (pageProps.initialData as Record<string, unknown>)
+      : undefined;
+  const searchResult =
+    initialData?.searchResult && typeof initialData.searchResult === "object"
+      ? (initialData.searchResult as Record<string, unknown>)
+      : undefined;
+  const itemStacks = Array.isArray(searchResult?.itemStacks)
+    ? (searchResult.itemStacks as unknown[])
+    : [];
+
+  let fallbackItems: unknown[] = [];
+
+  for (const stack of itemStacks) {
+    if (!stack || typeof stack !== "object") continue;
+
+    const candidate = stack as Record<string, unknown>;
+    const meta =
+      candidate.meta && typeof candidate.meta === "object"
+        ? (candidate.meta as Record<string, unknown>)
+        : undefined;
+    const items = Array.isArray(candidate.items)
+      ? (candidate.items as unknown[])
+      : Array.isArray(candidate.itemsV2)
+        ? (candidate.itemsV2 as unknown[])
+        : [];
+
+    if (items.length === 0) continue;
+
+    if (fallbackItems.length === 0) {
+      fallbackItems = items;
+    }
+
+    if (meta?.isSponsored === true) continue;
+    if (sanitizeOptionalText(meta?.stackType) === "STORE_LED") {
+      return items;
+    }
+  }
+
+  return fallbackItems;
 }
 
 function parseProductList(payload: unknown): OpenPricesProduct[] {
-  if (!payload || typeof payload !== "object") return [];
-  const items = Array.isArray((payload as Record<string, unknown>).items)
-    ? ((payload as Record<string, unknown>).items as unknown[])
-    : [];
+  const items = extractWalmartResultItems(payload);
 
   return items
     .map(parseProduct)
-    .filter((product): product is OpenPricesProduct => Boolean(product));
+    .filter((product): product is OpenPricesProduct => Boolean(product))
+    .slice(0, PRODUCT_SEARCH_LIMIT);
 }
 
-function parsePriceStats(payload: unknown): OpenPricesStats {
-  if (!payload || typeof payload !== "object") {
-    return {
-      priceCount: 0,
-      minimumPrice: null,
-      maximumPrice: null,
-      averagePrice: null,
-    };
+function buildInlinePricing(product: OpenPricesProduct): OpenPricesProductPricing | null {
+  if (product.packagePrice === null || product.packagePrice <= 0) {
+    return null;
   }
 
-  const candidate = payload as Record<string, unknown>;
   return {
-    priceCount: sanitizeOptionalInteger(candidate.price__count) ?? 0,
-    minimumPrice: sanitizeOptionalNumber(candidate.price__min),
-    maximumPrice: sanitizeOptionalNumber(candidate.price__max),
-    averagePrice: sanitizeOptionalNumber(candidate.price__avg),
+    stats: {
+      priceCount: 1,
+      minimumPrice: product.packagePrice,
+      maximumPrice: product.packagePrice,
+      averagePrice: product.packagePrice,
+    },
+    latestPrice: {
+      price: product.packagePrice,
+      currency: "USD",
+      storeName: "Walmart",
+      countryCode: "US",
+    },
   };
 }
 
-function parsePriceRecord(input: unknown): OpenPricesPriceRecord | null {
-  if (!input || typeof input !== "object") return null;
+function extractWalmartSearchPayload(html: string): unknown {
+  const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+  if (!match) {
+    throw new PricingRouteError(
+      "Walmart search results could not be parsed for pricing data.",
+      502
+    );
+  }
 
-  const candidate = input as Record<string, unknown>;
-  const price = sanitizeOptionalNumber(candidate.price);
-  const currency = sanitizeOptionalText(candidate.currency);
-  if (price === null || price <= 0 || !currency) return null;
-
-  const location =
-    candidate.location && typeof candidate.location === "object"
-      ? (candidate.location as Record<string, unknown>)
-      : undefined;
-
-  return {
-    price,
-    currency,
-    date: sanitizeOptionalText(candidate.date),
-    storeName: sanitizeOptionalText(location?.osm_name),
-    countryCode: sanitizeOptionalText(location?.osm_address_country_code)?.toUpperCase(),
-  };
+  try {
+    return JSON.parse(match[1]) as unknown;
+  } catch {
+    throw new PricingRouteError(
+      "Walmart search results returned malformed pricing data.",
+      502
+    );
+  }
 }
 
-function parsePriceList(payload: unknown): OpenPricesPriceRecord[] {
-  if (!payload || typeof payload !== "object") return [];
-  const items = Array.isArray((payload as Record<string, unknown>).items)
-    ? ((payload as Record<string, unknown>).items as unknown[])
-    : [];
+async function fetchWalmartSearchPayload(query: string): Promise<unknown> {
+  const searchParams = new URLSearchParams({
+    q: query,
+  });
 
-  return items
-    .map(parsePriceRecord)
-    .filter((record): record is OpenPricesPriceRecord => Boolean(record));
-}
-
-function extractProviderMessage(input: unknown): string | undefined {
-  if (!input || typeof input !== "object") return undefined;
-
-  const candidate = input as Record<string, unknown>;
-  return (
-    sanitizeOptionalText(candidate.detail) ??
-    sanitizeOptionalText(candidate.message) ??
-    sanitizeOptionalText(candidate.error) ??
-    sanitizeOptionalText(candidate.status)
-  );
-}
-
-async function fetchOpenPricesJson(url: string): Promise<unknown> {
-  const response = await fetch(url, {
+  const response = await fetch(`${WALMART_SEARCH_BASE_URL}?${searchParams.toString()}`, {
     headers: {
-      Accept: "application/json",
-      "User-Agent": OPEN_PRICES_USER_AGENT,
+      Accept: "text/html,application/xhtml+xml",
+      "Accept-Language": "en-US,en;q=0.9",
+      "User-Agent": WALMART_USER_AGENT,
     },
     cache: "no-store",
   });
 
-  let payload: unknown = null;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = null;
-  }
+  const payload = await response.text();
 
   if (!response.ok) {
-    const providerMessage = extractProviderMessage(payload);
     throw new PricingRouteError(
-      providerMessage ?? `Open Food Facts Open Prices request failed with status ${response.status}.`,
+      `Walmart search request failed with status ${response.status}.`,
       response.status >= 500 ? 502 : response.status
     );
   }
 
-  return payload;
+  return extractWalmartSearchPayload(payload);
 }
 
 async function searchProductsForQuery(query: string): Promise<OpenPricesProduct[]> {
   const normalizedQuery = normalizeSearchTerm(query);
 
   return getCachedPromise(productSearchCache, normalizedQuery, async () => {
-    const searchParams = new URLSearchParams({
-      product_name__like: normalizedQuery,
-      price_count__gte: "1",
-      size: String(PRODUCT_SEARCH_LIMIT),
-    });
+    const payload = await fetchWalmartSearchPayload(normalizedQuery);
+    const products = parseProductList(payload);
+    const expiresAt = Date.now() + OPEN_PRICES_CACHE_TTL_MS;
 
-    const payload = await fetchOpenPricesJson(
-      `${OPEN_PRICES_API_BASE_URL}/products?${searchParams.toString()}`
-    );
+    for (const product of products) {
+      const pricing = buildInlinePricing(product);
+      if (!pricing) continue;
 
-    return parseProductList(payload);
+      productPricingCache.set(product.id, {
+        expiresAt,
+        value: Promise.resolve(pricing),
+      });
+    }
+
+    return products;
   });
 }
 
@@ -1383,7 +1469,14 @@ async function searchProducts(searchPlan: IngredientSearchPlan): Promise<OpenPri
   const results = await mapWithConcurrency(
     searchPlan.searchQueries.slice(0, SEARCH_QUERY_LIMIT),
     2,
-    (query) => searchProductsForQuery(query)
+    async (query) => {
+      try {
+        return await searchProductsForQuery(query);
+      } catch (error) {
+        console.error(`Walmart search failed for query "${query}":`, error);
+        return [];
+      }
+    }
   );
 
   const productsById = new Map<number, OpenPricesProduct>();
@@ -1399,31 +1492,12 @@ async function searchProducts(searchPlan: IngredientSearchPlan): Promise<OpenPri
 }
 
 async function getProductPricing(productId: number): Promise<OpenPricesProductPricing | null> {
-  return getCachedPromise(productPricingCache, productId, async () => {
-    const statsParams = new URLSearchParams({
-      product_id: String(productId),
-      currency: "USD",
-    });
-    const latestPriceParams = new URLSearchParams({
-      product_id: String(productId),
-      currency: "USD",
-      size: "1",
-      order_by: "-date",
-    });
+  const cached = productPricingCache.get(productId);
+  if (!cached || cached.expiresAt <= Date.now()) {
+    return null;
+  }
 
-    const [statsPayload, latestPricePayload] = await Promise.all([
-      fetchOpenPricesJson(`${OPEN_PRICES_API_BASE_URL}/prices/stats?${statsParams.toString()}`),
-      fetchOpenPricesJson(`${OPEN_PRICES_API_BASE_URL}/prices?${latestPriceParams.toString()}`),
-    ]);
-
-    const stats = parsePriceStats(statsPayload);
-    if (stats.priceCount <= 0 || stats.averagePrice === null) {
-      return null;
-    }
-
-    const latestPrice = parsePriceList(latestPricePayload)[0] ?? null;
-    return { stats, latestPrice };
-  });
+  return cached.value;
 }
 
 function buildProductSearchText(product: OpenPricesProduct): string {
@@ -1563,7 +1637,7 @@ function buildPreliminaryProductMatch(
 
 function parseProductNamePackageMeasurement(productName: string): ProductPackageMeasurement | null {
   const match = normalizeText(productName).match(
-    /((?:\d+\s+\d+\/\d+)|(?:\d+\/\d+)|(?:\d*\.\d+)|(?:\d+))\s*(fluid ounces?|fluid ozs?|fluid oz|fl oz|floz|ounces?|oz|pounds?|lbs?|lb|kilograms?|kg|grams?|g|milliliters?|millilitres?|ml|liters?|litres?|l|quarts?|qt|pints?|pt|gallons?|gal|tablespoons?|tbsp|teaspoons?|tsp)\b/
+    /((?:\d+\s+\d+\/\d+)|(?:\d+\/\d+)|(?:\d*\.\d+)|(?:\d+))\s*(count|ct|each|ea|piece|pieces|pack|packs|pk|bunch|bunches|bulb|bulbs|head|heads|fluid ounces?|fluid ozs?|fluid oz|fl oz|floz|ounces?|oz|pounds?|lbs?|lb|kilograms?|kg|grams?|g|milliliters?|millilitres?|ml|liters?|litres?|l|quarts?|qt|pints?|pt|gallons?|gal|tablespoons?|tbsp|teaspoons?|tsp)\b/
   );
   if (!match) return null;
 
@@ -1776,20 +1850,16 @@ function buildUnavailableEstimate(
     packageSizeText: match?.comparableMeasurements?.packageSizeText,
     matchTitle: match?.product.productName,
     matchStore: match?.pricing.latestPrice?.storeName,
-    matchUrl: match?.product.code
-      ? `https://world.openfoodfacts.org/product/${match.product.code}`
-      : undefined,
+    matchUrl: buildStoreProductUrl(match?.product.code),
     confidence: match
       ? clampConfidence(
           match.tokenCoverage * 0.45 +
             (match.sectionBonus > 0 ? 0.2 : 0) +
-            (match.pricing.stats.priceCount > 1 ? 0.15 : 0.05)
+            (match.pricing.latestPrice ? 0.1 : 0)
         )
       : null,
     explanation: match
-      ? `${match.pricing.stats.priceCount} USD price observation${
-          match.pricing.stats.priceCount === 1 ? "" : "s"
-        }${match.pricing.latestPrice?.storeName ? ` · Latest at ${match.pricing.latestPrice.storeName}` : ""}`
+      ? `${match.pricing.latestPrice?.storeName ?? "Walmart"} search result price captured at lookup time`
       : undefined,
     unavailableReason: reasonWithSearch,
   };
@@ -1870,7 +1940,7 @@ async function estimateIngredientPrice(
   if (products.length === 0) {
     return buildUnavailableEstimate(
       ingredient,
-      "Open Food Facts Open Prices did not return a usable grocery product for this ingredient.",
+      "Walmart search did not return a usable grocery product for this ingredient.",
       searchPlan
     );
   }
@@ -1884,7 +1954,7 @@ async function estimateIngredientPrice(
   if (preliminaryMatches.length === 0) {
     return buildUnavailableEstimate(
       ingredient,
-      "Open Food Facts Open Prices did not return a confident grocery match for this ingredient.",
+      "Walmart search did not return a confident grocery match for this ingredient.",
       searchPlan
     );
   }
@@ -1900,7 +1970,7 @@ async function estimateIngredientPrice(
   if (scoredMatches.length === 0) {
     return buildUnavailableEstimate(
       ingredient,
-      "Open Food Facts Open Prices did not return any recent USD price data for this ingredient.",
+      "Walmart search did not return a priced grocery result for this ingredient.",
       searchPlan
     );
   }
@@ -1910,7 +1980,7 @@ async function estimateIngredientPrice(
   if (bestMatch.finalScore < 10 || (bestMatch.tokenCoverage < 0.5 && !bestMatch.exactPhraseMatch)) {
     return buildUnavailableEstimate(
       ingredient,
-      "Open Food Facts Open Prices did not return a confident grocery match for this ingredient.",
+      "Walmart search did not return a confident grocery match for this ingredient.",
       searchPlan,
       bestMatch
     );
@@ -1920,7 +1990,7 @@ async function estimateIngredientPrice(
   if (!bestMatch.comparableMeasurements) {
     return buildUnavailableEstimate(
       ingredient,
-      "Open Food Facts found a product, but its package size could not be converted to this recipe quantity automatically.",
+      "Walmart returned a product, but its package size could not be converted to this recipe quantity automatically.",
       searchPlan,
       bestMatch
     );
@@ -1944,9 +2014,7 @@ async function estimateIngredientPrice(
     packageSizeText: bestMatch.comparableMeasurements.packageSizeText,
     matchTitle: bestMatch.product.productName,
     matchStore: bestMatch.pricing.latestPrice?.storeName,
-    matchUrl: bestMatch.product.code
-      ? `https://world.openfoodfacts.org/product/${bestMatch.product.code}`
-      : undefined,
+    matchUrl: buildStoreProductUrl(bestMatch.product.code),
     confidence: clampConfidence(
       bestMatch.tokenCoverage * 0.45 +
         (bestMatch.exactPhraseMatch ? 0.2 : 0) +
@@ -1954,14 +2022,12 @@ async function estimateIngredientPrice(
         (bestMatch.comparableMeasurements.usedApproximateDensity ? 0.08 : 0.16) +
         (bestMatch.comparableMeasurements.inferredUnit ? 0.04 : 0.08)
     ),
-    explanation: `${bestMatch.pricing.stats.priceCount} USD price observation${
-      bestMatch.pricing.stats.priceCount === 1 ? "" : "s"
-    }${bestMatch.pricing.latestPrice?.storeName ? ` · Latest at ${bestMatch.pricing.latestPrice.storeName}` : ""}`,
+    explanation: `${bestMatch.pricing.latestPrice?.storeName ?? "Walmart"} search result price captured at lookup time`,
     unavailableReason: null,
   };
 }
 
-export async function estimateRecipeWithOpenFoodFacts(
+export async function estimateRecipeWithWalmartSearch(
   input: unknown
 ): Promise<RecipePriceEstimate> {
   const body = (input ?? {}) as RecipePricingRequest;
@@ -2006,3 +2072,5 @@ export async function estimateRecipeWithOpenFoodFacts(
     ingredients: estimates,
   };
 }
+
+export const estimateRecipeWithOpenFoodFacts = estimateRecipeWithWalmartSearch;

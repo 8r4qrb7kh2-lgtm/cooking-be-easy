@@ -33,7 +33,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-const PRICING_CACHE_PREFIX = "cooking-be-easy-open-food-facts-pricing";
+const PRICING_CACHE_PREFIX = "cooking-be-easy-walmart-pricing";
 const PRICING_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 
 function buildPricingCacheKey(recipe: Recipe): string {
@@ -250,7 +250,7 @@ export default function RecipeDetailPage() {
           detail:
             detailParts.length > 0
               ? detailParts.join(" · ")
-              : estimate.explanation ?? "Matched against Open Food Facts Open Prices products.",
+              : estimate.explanation ?? "Matched against Walmart grocery search results.",
           href: estimate.matchUrl,
         };
         return acc;
@@ -267,7 +267,7 @@ export default function RecipeDetailPage() {
       if (pricingLoading && !priceEstimate) {
         acc[ingredient.id] = {
           label: "Checking prices...",
-          detail: "Searching Open Food Facts Open Prices products for a usable match.",
+          detail: "Searching Walmart grocery results for a usable match.",
         };
         return acc;
       }
@@ -290,7 +290,7 @@ export default function RecipeDetailPage() {
   const canShareToMyNetDiary =
     typeof navigator !== "undefined" && typeof navigator.share === "function";
   const pricingSummary =
-    "Estimated from USDA produce averages and Open Food Facts packaged product matches adjusted to this recipe's ingredient quantities.";
+    "Estimated from USDA produce averages and Walmart grocery search results adjusted to this recipe's ingredient quantities.";
 
   async function copyMyNetDiaryExport() {
     try {
