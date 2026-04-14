@@ -303,8 +303,15 @@ export default function CookingModePage() {
 
   const recipeIngredients = recipe?.ingredients ?? [];
   const hasSourceSteps = (recipe?.sourceSteps.length ?? 0) > 0;
+  const hasDistinctSourceSteps = useMemo(() => {
+    if (!recipe || !hasSourceSteps) return false;
+    if (recipe.sourceSteps.length !== recipe.steps.length) return true;
+    return recipe.sourceSteps.some((sourceStep, index) => sourceStep !== recipe.steps[index]);
+  }, [hasSourceSteps, recipe]);
   const recipeSteps =
-    showSourceSteps && hasSourceSteps ? recipe?.sourceSteps ?? [] : recipe?.steps ?? [];
+    showSourceSteps && hasDistinctSourceSteps
+      ? recipe?.sourceSteps ?? []
+      : recipe?.steps ?? [];
   const totalSteps = recipeSteps.length;
   const step = recipeSteps[currentStep] ?? "";
   const nextStep =
@@ -323,6 +330,12 @@ export default function CookingModePage() {
   }, [recipeSteps.length]);
 
   useEffect(() => {
+    if (!hasDistinctSourceSteps && showSourceSteps) {
+      setShowSourceSteps(false);
+    }
+  }, [hasDistinctSourceSteps, showSourceSteps]);
+
+  useEffect(() => {
     if (!recipe) return;
 
     const ingredientsPayload = recipe.ingredients.map((ingredient) => ({
@@ -332,7 +345,7 @@ export default function CookingModePage() {
       unit: ingredient.unit,
     }));
     const stepsPayload = recipeSteps;
-    const stepSourceKey = showSourceSteps && hasSourceSteps ? "source" : "adjusted";
+    const stepSourceKey = showSourceSteps && hasDistinctSourceSteps ? "source" : "cooking";
 
     if (ingredientsPayload.length === 0 || stepsPayload.length === 0) {
       setAiFirstStepByIngredientId({});
@@ -420,7 +433,7 @@ export default function CookingModePage() {
     return () => {
       cancelled = true;
     };
-  }, [hasSourceSteps, recipe, recipeSteps, showSourceSteps]);
+  }, [hasDistinctSourceSteps, recipe, recipeSteps, showSourceSteps]);
 
   const ingredientById = useMemo(
     () => new Map(recipeIngredients.map((ingredient) => [ingredient.id, ingredient])),
@@ -928,7 +941,7 @@ export default function CookingModePage() {
           <h1 className="text-lg font-bold text-gray-900 truncate">{recipe.name}</h1>
           <p className="text-xs text-gray-400">
             Step {currentStep + 1} of {totalSteps} ·{" "}
-            {showSourceSteps ? "Raw source" : "AI adjusted"}
+            {showSourceSteps ? "Source steps" : "Cooking steps"}
           </p>
         </div>
         <Flame size={20} className="text-brand-600 shrink-0" />
@@ -942,7 +955,7 @@ export default function CookingModePage() {
       </div>
 
       <div className="flex flex-wrap gap-2 mb-5">
-        {hasSourceSteps && (
+        {hasDistinctSourceSteps && (
           <button
             type="button"
             onClick={() => setShowSourceSteps((value) => !value)}
@@ -952,8 +965,14 @@ export default function CookingModePage() {
                 : "border-brand-300 bg-brand-50 text-brand-700 hover:bg-brand-100"
             }`}
           >
-            {showSourceSteps ? "Show AI steps" : "Show raw steps"}
+            {showSourceSteps ? "Show cooking steps" : "Show source steps"}
           </button>
+        )}
+
+        {hasSourceSteps && !hasDistinctSourceSteps && (
+          <span className="inline-flex items-center rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-500">
+            Source and cooking steps are the same
+          </span>
         )}
 
         <button
