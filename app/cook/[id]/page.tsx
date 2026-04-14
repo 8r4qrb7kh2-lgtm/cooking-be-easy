@@ -3,7 +3,6 @@
 import {
   MutableRefObject,
   ReactNode,
-  TouchEvent as ReactTouchEvent,
   UIEvent,
   useCallback,
   useEffect,
@@ -61,8 +60,6 @@ type NavigatorWithWakeLock = Navigator & {
 
 const STEP_INGREDIENT_MAPPING_CACHE_KEY_PREFIX =
   "cooking-be-easy-step-ingredient-map";
-const MOBILE_INGREDIENT_DRAWER_OPEN_THRESHOLD_PX = 56;
-const MOBILE_INGREDIENT_DRAWER_MAX_WIDTH_PX = 384;
 
 const STEP_TIMER_ACTION_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /\bcarameli[sz](?:e|ed|ing)?\b/i, label: "caramelize" },
@@ -193,13 +190,8 @@ export default function CookingModePage() {
   const [aiFirstStepByIngredientId, setAiFirstStepByIngredientId] = useState<
     Record<string, number> | null
   >(null);
+  const [showSourceSteps, setShowSourceSteps] = useState(false);
   const [mobileIngredientsOpen, setMobileIngredientsOpen] = useState(false);
-  const [mobileIngredientHandlePull, setMobileIngredientHandlePull] = useState(0);
-  const [mobileIngredientHandleDragging, setMobileIngredientHandleDragging] =
-    useState(false);
-  const mobileIngredientsEdgeSwipeRef = useRef<{ x: number; y: number } | null>(
-    null
-  );
 
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const [wakeLockAvailable, setWakeLockAvailable] = useState(false);
@@ -309,73 +301,10 @@ export default function CookingModePage() {
     setQuantityScale(mode === "multiply" ? value : 1 / value);
   }
 
-  function getMobileIngredientDrawerWidthPx(): number {
-    if (typeof window === "undefined") return 320;
-    return Math.min(window.innerWidth * 0.88, MOBILE_INGREDIENT_DRAWER_MAX_WIDTH_PX);
-  }
-
-  function resetMobileIngredientHandle() {
-    mobileIngredientsEdgeSwipeRef.current = null;
-    setMobileIngredientHandleDragging(false);
-    setMobileIngredientHandlePull(0);
-  }
-
-  function handleMobileIngredientsEdgeTouchStart(
-    event: ReactTouchEvent<HTMLDivElement>
-  ) {
-    if (mobileIngredientsOpen) return;
-    const touch = event.touches[0];
-    if (!touch) return;
-    setMobileIngredientHandleDragging(true);
-    setMobileIngredientHandlePull(0);
-    mobileIngredientsEdgeSwipeRef.current = {
-      x: touch.clientX,
-      y: touch.clientY,
-    };
-  }
-
-  function handleMobileIngredientsEdgeTouchMove(
-    event: ReactTouchEvent<HTMLDivElement>
-  ) {
-    if (mobileIngredientsOpen) return;
-    const start = mobileIngredientsEdgeSwipeRef.current;
-    if (!start) return;
-
-    const touch = event.touches[0];
-    if (!touch) return;
-
-    const deltaX = start.x - touch.clientX;
-    const deltaY = Math.abs(start.y - touch.clientY);
-
-    if (deltaY > 28 && deltaY > Math.abs(deltaX)) {
-      resetMobileIngredientHandle();
-      return;
-    }
-
-    const pull = Math.max(0, Math.min(getMobileIngredientDrawerWidthPx(), deltaX));
-    if (pull > 0) {
-      event.preventDefault();
-      setMobileIngredientHandlePull(pull);
-    }
-  }
-
-  function handleMobileIngredientsEdgeTouchEnd() {
-    const shouldOpen =
-      mobileIngredientHandlePull >= MOBILE_INGREDIENT_DRAWER_OPEN_THRESHOLD_PX;
-    mobileIngredientsEdgeSwipeRef.current = null;
-    setMobileIngredientHandleDragging(false);
-    setMobileIngredientHandlePull(0);
-    if (shouldOpen) {
-      setMobileIngredientsOpen(true);
-    }
-  }
-
-  function handleMobileIngredientsEdgeTouchCancel() {
-    resetMobileIngredientHandle();
-  }
-
   const recipeIngredients = recipe?.ingredients ?? [];
-  const recipeSteps = recipe?.steps ?? [];
+  const hasSourceSteps = (recipe?.sourceSteps.length ?? 0) > 0;
+  const recipeSteps =
+    showSourceSteps && hasSourceSteps ? recipe?.sourceSteps ?? [] : recipe?.steps ?? [];
   const totalSteps = recipeSteps.length;
   const step = recipeSteps[currentStep] ?? "";
   const nextStep =
@@ -388,6 +317,12 @@ export default function CookingModePage() {
     ratedServingsYielded === null ? null : ratedServingsYielded * quantityScale;
 
   useEffect(() => {
+    setCurrentStep((stepIndex) =>
+      Math.min(stepIndex, Math.max(recipeSteps.length - 1, 0))
+    );
+  }, [recipeSteps.length]);
+
+  useEffect(() => {
     if (!recipe) return;
 
     const ingredientsPayload = recipe.ingredients.map((ingredient) => ({
@@ -396,14 +331,15 @@ export default function CookingModePage() {
       quantity: ingredient.quantity,
       unit: ingredient.unit,
     }));
-    const stepsPayload = recipe.steps;
+    const stepsPayload = recipeSteps;
+    const stepSourceKey = showSourceSteps && hasSourceSteps ? "source" : "adjusted";
 
     if (ingredientsPayload.length === 0 || stepsPayload.length === 0) {
       setAiFirstStepByIngredientId({});
       return;
     }
 
-    const cacheKey = `${STEP_INGREDIENT_MAPPING_CACHE_KEY_PREFIX}:${recipe.id}:${recipe.updatedAt}`;
+    const cacheKey = `${STEP_INGREDIENT_MAPPING_CACHE_KEY_PREFIX}:${recipe.id}:${stepSourceKey}:${recipe.updatedAt}`;
     setAiFirstStepByIngredientId(null);
 
     if (typeof window !== "undefined") {
@@ -484,7 +420,7 @@ export default function CookingModePage() {
     return () => {
       cancelled = true;
     };
-  }, [recipe]);
+  }, [hasSourceSteps, recipe, recipeSteps, showSourceSteps]);
 
   const ingredientById = useMemo(
     () => new Map(recipeIngredients.map((ingredient) => [ingredient.id, ingredient])),
@@ -639,14 +575,6 @@ export default function CookingModePage() {
     );
   }, [nextStep, nextStepCitations, renderStepWithIngredientCitations]);
 
-  const mobileIngredientDrawerPreviewActive =
-    !mobileIngredientsOpen && mobileIngredientHandlePull > 0;
-  const showMobileIngredientDrawer =
-    mobileIngredientsOpen || mobileIngredientDrawerPreviewActive;
-  const mobileIngredientDrawerTransform = mobileIngredientsOpen
-    ? "translateX(0)"
-    : `translateX(calc(100% - ${mobileIngredientHandlePull}px))`;
-
   useEffect(() => {
     desktopIngredientPanelRef.current?.scrollTo({ top: 0, behavior: "auto" });
     if (!mobileIngredientsOpen) {
@@ -659,12 +587,6 @@ export default function CookingModePage() {
     setConversions({});
     setConvertInputs({});
   }, [quantityScale]);
-
-  useEffect(() => {
-    if (mobileIngredientsOpen) {
-      resetMobileIngredientHandle();
-    }
-  }, [mobileIngredientsOpen]);
 
   useEffect(() => {
     if (!mobileIngredientsOpen || typeof window === "undefined") return;
@@ -1005,7 +927,8 @@ export default function CookingModePage() {
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-bold text-gray-900 truncate">{recipe.name}</h1>
           <p className="text-xs text-gray-400">
-            Step {currentStep + 1} of {totalSteps}
+            Step {currentStep + 1} of {totalSteps} ·{" "}
+            {showSourceSteps ? "Raw source" : "AI adjusted"}
           </p>
         </div>
         <Flame size={20} className="text-brand-600 shrink-0" />
@@ -1019,6 +942,20 @@ export default function CookingModePage() {
       </div>
 
       <div className="flex flex-wrap gap-2 mb-5">
+        {hasSourceSteps && (
+          <button
+            type="button"
+            onClick={() => setShowSourceSteps((value) => !value)}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium border transition-colors ${
+              showSourceSteps
+                ? "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                : "border-brand-300 bg-brand-50 text-brand-700 hover:bg-brand-100"
+            }`}
+          >
+            {showSourceSteps ? "Show AI steps" : "Show raw steps"}
+          </button>
+        )}
+
         <button
           type="button"
           onClick={() => setKeepScreenAwake((value) => !value)}
@@ -1119,48 +1056,24 @@ export default function CookingModePage() {
       </div>
 
       {!mobileIngredientsOpen && (
-        <div
-          aria-label="Drag left to open ingredients"
-          role="presentation"
-          className="lg:hidden fixed right-0 top-1/2 -translate-y-1/2 z-40"
+        <button
+          type="button"
+          onClick={() => setMobileIngredientsOpen(true)}
+          className="lg:hidden fixed right-4 z-40 inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white/95 px-3 py-2 text-sm font-medium text-gray-700 shadow-md backdrop-blur supports-[backdrop-filter]:bg-white/80"
+          style={{ bottom: "calc(env(safe-area-inset-bottom) + 9.5rem)" }}
         >
-          <div
-            className="h-16 w-9 rounded-l-full border border-r-0 border-gray-200 bg-white/95 shadow-md flex items-center justify-center text-gray-500 touch-none select-none"
-            style={{
-              transform: `translateX(-${mobileIngredientHandlePull}px)`,
-              transition: mobileIngredientHandleDragging
-                ? "none"
-                : "transform 180ms ease-out",
-            }}
-            onTouchStart={handleMobileIngredientsEdgeTouchStart}
-            onTouchMove={handleMobileIngredientsEdgeTouchMove}
-            onTouchEnd={handleMobileIngredientsEdgeTouchEnd}
-            onTouchCancel={handleMobileIngredientsEdgeTouchCancel}
-          >
-            <ChevronLeft size={16} />
-          </div>
-        </div>
+          Ingredients
+          <ChevronLeft size={16} />
+        </button>
       )}
 
-      {showMobileIngredientDrawer && (
+      {mobileIngredientsOpen && (
         <div
-          className={`lg:hidden fixed inset-0 z-50 overscroll-contain ${
-            mobileIngredientsOpen
-              ? "bg-black/35"
-              : "bg-transparent pointer-events-none"
-          }`}
+          className="lg:hidden fixed inset-0 z-50 bg-black/35 overscroll-contain"
           onClick={() => setMobileIngredientsOpen(false)}
         >
           <aside
-            className={`absolute right-0 top-0 h-full w-[88vw] max-w-sm bg-white p-4 overflow-hidden flex flex-col overscroll-contain ${
-              mobileIngredientsOpen ? "pointer-events-auto" : "pointer-events-none"
-            }`}
-            style={{
-              transform: mobileIngredientDrawerTransform,
-              transition: mobileIngredientHandleDragging
-                ? "none"
-                : "transform 220ms ease-out",
-            }}
+            className="absolute right-0 top-0 h-full w-[88vw] max-w-sm bg-white p-4 overflow-hidden flex flex-col overscroll-contain shadow-xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">

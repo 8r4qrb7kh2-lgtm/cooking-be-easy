@@ -29,7 +29,7 @@ import {
   Share2,
   Star,
   Flame,
-  CalendarDays,
+  ShoppingCart,
   RefreshCw,
 } from "lucide-react";
 
@@ -375,11 +375,11 @@ export default function RecipeDetailPage() {
               Cooking mode
             </Link>
             <Link
-              href={`/planner?add=${recipe.id}`}
+              href={`/shopping?add=${recipe.id}`}
               className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
             >
-              <CalendarDays size={12} />
-              Add to planner
+              <ShoppingCart size={12} />
+              Add to shopping
             </Link>
           </div>
         </div>
