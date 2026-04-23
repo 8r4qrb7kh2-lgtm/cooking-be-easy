@@ -55,3 +55,35 @@ export interface AppState {
   weeklyPlanIds: string[];
   shoppingList: ShoppingListItem[];
 }
+
+export interface ReceiptItem {
+  id: string;
+  receiptId: string;
+  rawLabel: string;
+  normalizedName: string;
+  brand?: string;
+  section?: GrocerySection;
+  quantity?: number;
+  unit?: string;
+  packageSizeText?: string;
+  unitPrice?: number;
+  totalPrice: number;
+  currencyCode: string;
+  purchasedAt?: string;
+  storeName?: string;
+  confidence?: number;
+}
+
+export interface Receipt {
+  id: string;
+  storeName?: string;
+  storeLocation?: string;
+  purchaseDate?: string;
+  subtotal?: number;
+  total?: number;
+  currencyCode: string;
+  imageBase64?: string;
+  createdAt: string;
+  updatedAt: string;
+  items: ReceiptItem[];
+}

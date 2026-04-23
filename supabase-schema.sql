@@ -69,6 +69,45 @@ create table shopping_list (
 );
 alter table shopping_list enable row level security;
 
+-- Grocery receipts (price library for recipe pricing)
+create table receipts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  household_id uuid references households(id),
+  store_name text,
+  store_location text,
+  purchase_date date,
+  subtotal numeric(10,2),
+  total numeric(10,2),
+  currency_code text not null default 'USD',
+  image_base64 text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table receipts enable row level security;
+
+create table receipt_items (
+  id uuid primary key default gen_random_uuid(),
+  receipt_id uuid references receipts(id) on delete cascade not null,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  household_id uuid references households(id),
+  raw_label text not null,
+  normalized_name text not null,
+  brand text,
+  section text,
+  quantity numeric(12,3),
+  unit text,
+  package_size_text text,
+  unit_price numeric(10,2),
+  total_price numeric(10,2) not null,
+  currency_code text not null default 'USD',
+  purchased_at date,
+  store_name text,
+  confidence numeric(3,2),
+  created_at timestamptz not null default now()
+);
+alter table receipt_items enable row level security;
+
 -- Helper function: returns all user IDs in the caller's household
 create or replace function get_household_user_ids()
 returns uuid[] language sql security definer stable as $$
@@ -93,6 +132,20 @@ create policy "Users manage own or household plans" on weekly_plans for all
 
 -- Shopping list: own or same household
 create policy "Users manage own or household list" on shopping_list for all
+  using (
+    auth.uid() = user_id
+    OR household_id IN (select household_id from household_members where user_id = auth.uid())
+  );
+
+-- Receipts: own or same household
+create policy "Users manage own or household receipts" on receipts for all
+  using (
+    auth.uid() = user_id
+    OR household_id IN (select household_id from household_members where user_id = auth.uid())
+  );
+
+-- Receipt items: own or same household
+create policy "Users manage own or household receipt items" on receipt_items for all
   using (
     auth.uid() = user_id
     OR household_id IN (select household_id from household_members where user_id = auth.uid())

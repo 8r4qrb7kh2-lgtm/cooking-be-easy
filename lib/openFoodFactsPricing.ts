@@ -3,7 +3,7 @@ import {
   RecipePriceEstimate,
   RecipePricingRequest,
 } from "@/lib/recipePricing";
-import { Ingredient } from "@/lib/types";
+import { Ingredient, ReceiptItem } from "@/lib/types";
 import { normalizeExactUnit } from "@/lib/unitConversion";
 import { estimateProduceIngredientPrice } from "@/lib/usdaProducePricing";
 import { estimateIngredientsWithClaude } from "@/lib/claudeGroceryPricing";
@@ -159,6 +159,42 @@ function formatUsd(value: number): string {
   }).format(value);
 }
 
+function tokenSet(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((token) => token.length > 2)
+  );
+}
+
+function hasPlausibleReceiptMatch(
+  ingredient: Ingredient,
+  receiptLibrary: ReceiptItem[]
+): boolean {
+  if (receiptLibrary.length === 0) return false;
+  const ingredientTokens = tokenSet(ingredient.name);
+  if (ingredientTokens.size === 0) return false;
+
+  for (const item of receiptLibrary) {
+    const itemTokens = tokenSet(item.normalizedName);
+    if (itemTokens.size === 0) continue;
+    let overlap = 0;
+    for (const token of itemTokens) {
+      if (ingredientTokens.has(token)) overlap += 1;
+    }
+    // Require at least 2 shared tokens OR 1 shared token when both strings are short.
+    if (
+      overlap >= 2 ||
+      (overlap >= 1 && itemTokens.size <= 3 && ingredientTokens.size <= 3)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function mapWithConcurrency<T, U>(
   items: T[],
   concurrency: number,
@@ -181,10 +217,12 @@ async function mapWithConcurrency<T, U>(
 }
 
 export async function estimateRecipeWithWalmartSearch(
-  input: unknown
+  input: unknown,
+  options: { receiptLibrary?: ReceiptItem[] } = {}
 ): Promise<RecipePriceEstimate> {
   const body = (input ?? {}) as RecipePricingRequest;
   const ingredients = Array.isArray(body.ingredients) ? body.ingredients.filter(isIngredient) : [];
+  const receiptLibrary = options.receiptLibrary ?? [];
 
   if (ingredients.length === 0) {
     return {
@@ -200,8 +238,12 @@ export async function estimateRecipeWithWalmartSearch(
   }
 
   // Tier 1: USDA ERS produce pricing for produce ingredients (authoritative national averages).
+  // Only use USDA when the user has NO receipts for that ingredient — receipts represent
+  // what the user actually paid, which is more relevant than national averages.
   const produceResults = await mapWithConcurrency(ingredients, 4, async (ingredient) => {
     if (ingredient.section !== "Produce") return null;
+    // Skip USDA if we have a plausible receipt match — Claude will use the receipt instead.
+    if (hasPlausibleReceiptMatch(ingredient, receiptLibrary)) return null;
     try {
       const estimate = await estimateProduceIngredientPrice(ingredient, buildSearchPlan(ingredient));
       return estimate;
@@ -223,9 +265,10 @@ export async function estimateRecipeWithWalmartSearch(
     }
   });
 
-  // Tier 2: Claude-backed grocery pricing covers everything USDA did not resolve.
+  // Tier 2: Claude-backed grocery pricing — uses the user's receipt library when available
+  // and falls back to typical US grocery averages for anything unmatched.
   if (needsClaude.length > 0) {
-    const claudeEstimates = await estimateIngredientsWithClaude(needsClaude);
+    const claudeEstimates = await estimateIngredientsWithClaude(needsClaude, receiptLibrary);
     for (const ingredient of needsClaude) {
       const estimate = claudeEstimates.get(ingredient.id);
       if (estimate) {
