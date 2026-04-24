@@ -286,11 +286,12 @@ export default function RecipeDetailPage() {
   if (!recipe) return null;
 
   const myNetDiaryExport = buildMyNetDiaryRecipeExport(recipe);
+  const recipeSourceUrl = recipe.sourceUrl;
   const sourceSteps = recipe.sourceSteps.length > 0 ? recipe.sourceSteps : recipe.steps;
   const canShareToMyNetDiary =
     typeof navigator !== "undefined" &&
     typeof navigator.share === "function" &&
-    Boolean(recipe.sourceUrl);
+    Boolean(recipeSourceUrl);
   const pricingSummary =
     "Estimated from USDA produce averages and Claude-estimated US grocery prices, adjusted to this recipe's ingredient quantities.";
 
@@ -305,14 +306,14 @@ export default function RecipeDetailPage() {
   }
 
   async function shareToMyNetDiary() {
-    if (!canShareToMyNetDiary || !recipe.sourceUrl) return;
+    if (!canShareToMyNetDiary || !recipeSourceUrl) return;
 
     setSharingToMyNetDiary(true);
     try {
       await navigator.share({
         title: myNetDiaryExport.title,
         text: myNetDiaryExport.fullText,
-        url: recipe.sourceUrl,
+        url: recipeSourceUrl,
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
