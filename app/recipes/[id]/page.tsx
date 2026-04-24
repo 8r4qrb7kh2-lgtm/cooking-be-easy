@@ -288,7 +288,9 @@ export default function RecipeDetailPage() {
   const myNetDiaryExport = buildMyNetDiaryRecipeExport(recipe);
   const sourceSteps = recipe.sourceSteps.length > 0 ? recipe.sourceSteps : recipe.steps;
   const canShareToMyNetDiary =
-    typeof navigator !== "undefined" && typeof navigator.share === "function";
+    typeof navigator !== "undefined" &&
+    typeof navigator.share === "function" &&
+    Boolean(recipe.sourceUrl);
   const pricingSummary =
     "Estimated from USDA produce averages and Claude-estimated US grocery prices, adjusted to this recipe's ingredient quantities.";
 
@@ -303,13 +305,14 @@ export default function RecipeDetailPage() {
   }
 
   async function shareToMyNetDiary() {
-    if (!canShareToMyNetDiary) return;
+    if (!canShareToMyNetDiary || !recipe.sourceUrl) return;
 
     setSharingToMyNetDiary(true);
     try {
       await navigator.share({
         title: myNetDiaryExport.title,
         text: myNetDiaryExport.fullText,
+        url: recipe.sourceUrl,
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -632,7 +635,7 @@ export default function RecipeDetailPage() {
         </div>
 
         <p className="mt-3 text-xs text-gray-400">
-          Share works best on iPhone or iPad when the MyNetDiary app and its recipe import share extension are installed.
+          Share sends the source URL so MyNetDiary&apos;s import extension can parse it directly. For manual or photo recipes without a source URL, use Copy and paste into MyNetDiary&apos;s &quot;Paste Ingredients and Cooking Directions&quot; flow.
         </p>
       </div>
 
