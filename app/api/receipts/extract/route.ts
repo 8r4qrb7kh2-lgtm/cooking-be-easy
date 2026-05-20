@@ -44,15 +44,63 @@ Also extract receipt-level metadata:
 - subtotal: receipt subtotal before tax, or null
 - total: final paid total after tax, or null
 
-Output ONLY valid JSON (no markdown fences, no prose):
-{
-  "storeName": "...",
-  "storeLocation": "...",
-  "purchaseDate": "YYYY-MM-DD",
-  "subtotal": 87.69,
-  "total": 78.69,
-  "items": [ { ... }, ... ]
-}`;
+Call the submit_receipt tool with every line item — do not skip any.`;
+
+const SECTION_VALUES = [
+  "Produce",
+  "Meat & Seafood",
+  "Dairy & Eggs",
+  "Bakery",
+  "Pantry & Dry Goods",
+  "Frozen Foods",
+  "Beverages",
+  "Snacks",
+  "Condiments & Sauces",
+  "Spices & Baking",
+  "Deli",
+  "Other",
+];
+
+const RECEIPT_TOOL: Anthropic.Tool = {
+  name: "submit_receipt",
+  description: "Submit the parsed grocery receipt with every line item",
+  input_schema: {
+    type: "object",
+    properties: {
+      storeName: { type: "string", description: "Friendly store name, or empty if not visible" },
+      storeLocation: { type: "string", description: "Address or neighborhood, or empty" },
+      purchaseDate: { type: "string", description: "ISO YYYY-MM-DD if visible, else empty" },
+      subtotal: { type: "number", description: "Subtotal before tax, 0 if not visible" },
+      total: { type: "number", description: "Final paid total, 0 if not visible" },
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            rawLabel: { type: "string" },
+            normalizedName: { type: "string" },
+            brand: { type: "string", description: "Brand name if identifiable, else empty" },
+            section: { type: "string", enum: SECTION_VALUES },
+            quantity: { type: "number", description: "0 if not specified" },
+            unit: { type: "string", description: "Empty if quantity is unknown" },
+            packageSizeText: { type: "string", description: "Empty if not inferable" },
+            unitPrice: { type: "number", description: "0 if not shown" },
+            totalPrice: { type: "number" },
+            confidence: { type: "number", description: "0.0 to 1.0" },
+          },
+          required: [
+            "rawLabel",
+            "normalizedName",
+            "section",
+            "totalPrice",
+            "confidence",
+          ],
+        },
+      },
+    },
+    required: ["items"],
+  },
+};
 
 export async function POST(request: NextRequest) {
   try {
@@ -72,8 +120,10 @@ export async function POST(request: NextRequest) {
 
     const message = await client.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 8192,
+      max_tokens: 16000,
       system: SYSTEM_PROMPT,
+      tools: [RECEIPT_TOOL],
+      tool_choice: { type: "tool", name: "submit_receipt" },
       messages: [
         {
           role: "user",
@@ -89,32 +139,55 @@ export async function POST(request: NextRequest) {
             {
               type: "text",
               text:
-                "Extract every purchased line item from this grocery receipt and return the structured JSON described in the system prompt. Do not skip any items.",
+                "Extract every purchased line item from this grocery receipt and call submit_receipt with the structured data. Do not skip any items.",
             },
           ],
         },
       ],
     });
 
-    const textBlock = message.content.find((block) => block.type === "text");
-    const text = textBlock && textBlock.type === "text" ? textBlock.text : "";
-
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    const toolUseBlock = message.content.find((block) => block.type === "tool_use");
+    if (!toolUseBlock || toolUseBlock.type !== "tool_use") {
       return NextResponse.json(
         { error: "Could not parse receipt contents from image" },
         { status: 422 }
       );
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = toolUseBlock.input as {
+      storeName?: string;
+      storeLocation?: string;
+      purchaseDate?: string;
+      subtotal?: number;
+      total?: number;
+      items?: Record<string, unknown>[];
+    };
+
+    const emptyToNull = (s: unknown) =>
+      typeof s === "string" && s.trim() ? s : null;
+    const zeroToNull = (n: unknown) =>
+      typeof n === "number" && n > 0 ? n : null;
+
+    const items = (Array.isArray(parsed.items) ? parsed.items : []).map((item) => ({
+      rawLabel: typeof item.rawLabel === "string" ? item.rawLabel : "",
+      normalizedName: typeof item.normalizedName === "string" ? item.normalizedName : "",
+      brand: emptyToNull(item.brand),
+      section: typeof item.section === "string" ? item.section : "Other",
+      quantity: zeroToNull(item.quantity),
+      unit: emptyToNull(item.unit),
+      packageSizeText: emptyToNull(item.packageSizeText),
+      unitPrice: zeroToNull(item.unitPrice),
+      totalPrice: typeof item.totalPrice === "number" ? item.totalPrice : 0,
+      confidence: typeof item.confidence === "number" ? item.confidence : 0.8,
+    }));
+
     return NextResponse.json({
-      storeName: typeof parsed.storeName === "string" ? parsed.storeName : null,
-      storeLocation: typeof parsed.storeLocation === "string" ? parsed.storeLocation : null,
-      purchaseDate: typeof parsed.purchaseDate === "string" ? parsed.purchaseDate : null,
-      subtotal: typeof parsed.subtotal === "number" ? parsed.subtotal : null,
-      total: typeof parsed.total === "number" ? parsed.total : null,
-      items: Array.isArray(parsed.items) ? parsed.items : [],
+      storeName: emptyToNull(parsed.storeName),
+      storeLocation: emptyToNull(parsed.storeLocation),
+      purchaseDate: emptyToNull(parsed.purchaseDate),
+      subtotal: zeroToNull(parsed.subtotal),
+      total: zeroToNull(parsed.total),
+      items,
     });
   } catch (error) {
     console.error("Extract receipt error:", error);
