@@ -8,14 +8,23 @@ interface Props {
   label?: string;
   accept?: string;
   className?: string;
+  maxDimension?: number;
+  jpegQuality?: number;
 }
 
-export default function ImageUpload({ onImage, label = "Upload photo", accept = "image/*", className = "" }: Props) {
+export default function ImageUpload({
+  onImage,
+  label = "Upload photo",
+  accept = "image/*",
+  className = "",
+  maxDimension,
+  jpegQuality,
+}: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   async function handleFile(file: File) {
     const { compressImage } = await import("@/lib/utils");
-    const base64 = await compressImage(file);
+    const base64 = await compressImage(file, maxDimension, jpegQuality);
     onImage(base64);
   }
 

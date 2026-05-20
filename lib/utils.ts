@@ -15,31 +15,28 @@ export async function compressImage(
   maxWidthOrHeight = 1200,
   quality = 0.8
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const canvas = document.createElement("canvas");
-      let { width, height } = img;
-      if (width > maxWidthOrHeight || height > maxWidthOrHeight) {
-        if (width > height) {
-          height = Math.round((height * maxWidthOrHeight) / width);
-          width = maxWidthOrHeight;
-        } else {
-          width = Math.round((width * maxWidthOrHeight) / height);
-          height = maxWidthOrHeight;
-        }
+  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  try {
+    let width = bitmap.width;
+    let height = bitmap.height;
+    if (width > maxWidthOrHeight || height > maxWidthOrHeight) {
+      if (width > height) {
+        height = Math.round((height * maxWidthOrHeight) / width);
+        width = maxWidthOrHeight;
+      } else {
+        width = Math.round((width * maxWidthOrHeight) / height);
+        height = maxWidthOrHeight;
       }
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL("image/jpeg", quality));
-    };
-    img.onerror = reject;
-    img.src = url;
-  });
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    return canvas.toDataURL("image/jpeg", quality);
+  } finally {
+    bitmap.close();
+  }
 }
 
 export function mergeIngredients(

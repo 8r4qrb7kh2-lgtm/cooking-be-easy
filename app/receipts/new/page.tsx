@@ -232,6 +232,8 @@ export default function NewReceiptPage() {
               label="Photo of receipt"
               onImage={analyzeReceipt}
               className="h-56"
+              maxDimension={2400}
+              jpegQuality={0.92}
             />
           )}
 
