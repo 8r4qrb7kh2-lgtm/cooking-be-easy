@@ -7,6 +7,8 @@ const client = new Anthropic();
 
 const SYSTEM_PROMPT = `You are a grocery-receipt parser. Given a photo of a receipt, extract every purchased line item into structured JSON.
 
+CRITICAL: Do not fabricate items. If a line is too blurry, cut off, glare-blocked, or otherwise illegible to confidently read its name and price, do NOT guess. Instead, add a short note to unreadableNotes describing what you can tell about it (position, partial text, suspected category) so the user can manually enter it. If the whole receipt is unreadable, return empty items and a single note explaining why (e.g. "Photo is too blurry to read any items — please retake in better light").
+
 Grocery receipts are cryptic — expect abbreviations, brand prefixes, and store-specific codes. You must translate these into clean, searchable grocery product names.
 
 Examples of translations:
@@ -44,7 +46,7 @@ Also extract receipt-level metadata:
 - subtotal: receipt subtotal before tax, or null
 - total: final paid total after tax, or null
 
-Call the submit_receipt tool with every line item — do not skip any.`;
+Call the submit_receipt tool with every line item you can read confidently, plus an unreadableNotes array listing anything you saw but could not confidently parse. Never invent values to fill the schema.`;
 
 const SECTION_VALUES = [
   "Produce",
@@ -63,7 +65,8 @@ const SECTION_VALUES = [
 
 const RECEIPT_TOOL: Anthropic.Tool = {
   name: "submit_receipt",
-  description: "Submit the parsed grocery receipt with every line item",
+  description:
+    "Submit the parsed grocery receipt with every line item you can read confidently, and unreadableNotes for any items you saw but could not parse",
   input_schema: {
     type: "object",
     properties: {
@@ -97,8 +100,14 @@ const RECEIPT_TOOL: Anthropic.Tool = {
           ],
         },
       },
+      unreadableNotes: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "Short notes about line items visible on the receipt that you could not confidently read. One entry per unreadable item (or one entry for a wholly unreadable receipt). Empty array if every visible item was read confidently.",
+      },
     },
-    required: ["items"],
+    required: ["items", "unreadableNotes"],
   },
 };
 
@@ -119,7 +128,7 @@ export async function POST(request: NextRequest) {
       | "image/webp";
 
     const message = await client.messages.create({
-      model: "claude-sonnet-4-6",
+      model: "claude-opus-4-7",
       max_tokens: 16000,
       system: SYSTEM_PROMPT,
       tools: [RECEIPT_TOOL],
@@ -139,7 +148,7 @@ export async function POST(request: NextRequest) {
             {
               type: "text",
               text:
-                "Extract every purchased line item from this grocery receipt and call submit_receipt with the structured data. Do not skip any items.",
+                "Extract every purchased line item from this grocery receipt and call submit_receipt with the structured data. For any item you can see on the receipt but cannot confidently read, add a short description to unreadableNotes instead of guessing. Do not invent values.",
             },
           ],
         },
@@ -161,6 +170,7 @@ export async function POST(request: NextRequest) {
       subtotal?: number;
       total?: number;
       items?: Record<string, unknown>[];
+      unreadableNotes?: unknown[];
     };
 
     const emptyToNull = (s: unknown) =>
@@ -181,6 +191,13 @@ export async function POST(request: NextRequest) {
       confidence: typeof item.confidence === "number" ? item.confidence : 0.8,
     }));
 
+    const unreadableNotes = (Array.isArray(parsed.unreadableNotes)
+      ? parsed.unreadableNotes
+      : []
+    )
+      .filter((note): note is string => typeof note === "string" && note.trim().length > 0)
+      .map((note) => note.trim());
+
     return NextResponse.json({
       storeName: emptyToNull(parsed.storeName),
       storeLocation: emptyToNull(parsed.storeLocation),
@@ -188,6 +205,7 @@ export async function POST(request: NextRequest) {
       subtotal: zeroToNull(parsed.subtotal),
       total: zeroToNull(parsed.total),
       items,
+      unreadableNotes,
     });
   } catch (error) {
     console.error("Extract receipt error:", error);

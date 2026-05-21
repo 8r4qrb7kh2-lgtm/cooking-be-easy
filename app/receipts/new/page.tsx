@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
+  AlertTriangle,
   ArrowLeft,
   Loader2,
   Sparkles,
@@ -63,6 +64,7 @@ export default function NewReceiptPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [draft, setDraft] = useState<DraftReceipt>(emptyDraft());
+  const [unreadableNotes, setUnreadableNotes] = useState<string[]>([]);
 
   async function analyzeReceipt(base64: string) {
     setPhoto(base64);
@@ -116,6 +118,13 @@ export default function NewReceiptPage() {
         total: typeof data.total === "number" ? String(data.total) : "",
         items,
       });
+      setUnreadableNotes(
+        Array.isArray(data.unreadableNotes)
+          ? data.unreadableNotes.filter(
+              (note: unknown): note is string => typeof note === "string" && note.trim().length > 0
+            )
+          : []
+      );
       setStep("review");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to analyze receipt");
@@ -258,6 +267,26 @@ export default function NewReceiptPage() {
               <p className="text-sm text-gray-500 flex-1">
                 Review the extracted items below. Fix anything that looks off — Claude does a great
                 job but abbreviations can be tricky. Click save when everything looks right.
+              </p>
+            </div>
+          )}
+
+          {unreadableNotes.length > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <div className="flex items-center gap-2 font-semibold mb-1">
+                <AlertTriangle size={16} />
+                {unreadableNotes.length === 1
+                  ? "Claude couldn't read 1 item on this receipt"
+                  : `Claude couldn't read ${unreadableNotes.length} items on this receipt`}
+              </div>
+              <ul className="list-disc pl-5 space-y-0.5 text-amber-800">
+                {unreadableNotes.map((note, i) => (
+                  <li key={i}>{note}</li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-amber-700">
+                Add these manually with the &ldquo;Add item&rdquo; button below, or retake the photo
+                in better light.
               </p>
             </div>
           )}
