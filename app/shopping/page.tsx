@@ -34,12 +34,41 @@ import {
   X,
 } from "lucide-react";
 
+// Rebuild the shopping list from the selected recipes while preserving the
+// user's work: checkmarks on items that still exist, and any manually-added
+// items (those not tied to a recipe). This lets the list auto-update on every
+// selection change without wiping checked state or hand-entered items.
+function buildPreservedShoppingList(
+  nextIds: string[],
+  recipesById: Record<string, Recipe>,
+  prevItems: ShoppingListItem[]
+): ShoppingListItem[] {
+  const nextRecipes = nextIds
+    .map((id) => recipesById[id])
+    .filter((recipe): recipe is Recipe => Boolean(recipe));
+  const merged = mergeIngredients(nextRecipes);
+
+  const itemKey = (name: string) => name.toLowerCase().trim();
+  const prevByKey = new Map(prevItems.map((item) => [itemKey(item.name), item]));
+  for (const item of merged) {
+    if (prevByKey.get(itemKey(item.name))?.checked) {
+      item.checked = true;
+    }
+  }
+
+  const mergedKeys = new Set(merged.map((item) => itemKey(item.name)));
+  const manualItems = prevItems.filter(
+    (item) => item.recipeIds.length === 0 && !mergedKeys.has(itemKey(item.name))
+  );
+
+  return [...merged, ...manualItems];
+}
+
 export default function ShoppingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const recipePickerRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(true);
-  const [buildingList, setBuildingList] = useState(false);
   const [items, setItems] = useState<ShoppingListItem[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
@@ -116,7 +145,8 @@ export default function ShoppingPage() {
       return;
     }
 
-    void persistSelectedRecipeIds(validSelectedRecipeIds);
+    void applySelectedRecipes(validSelectedRecipeIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, recipesById, selectedRecipeIds]);
 
   useEffect(() => {
@@ -130,9 +160,9 @@ export default function ShoppingPage() {
       return;
     }
 
-    const nextSelectedRecipeIds = [...selectedRecipeIds, addId];
-    void persistSelectedRecipeIds(nextSelectedRecipeIds);
+    void applySelectedRecipes([...selectedRecipeIds, addId]);
     router.replace("/shopping");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, recipesById, router, searchParams, selectedRecipeIds]);
 
   async function persist(next: ShoppingListItem[]) {
@@ -140,9 +170,15 @@ export default function ShoppingPage() {
     await saveShoppingList(next);
   }
 
-  async function persistSelectedRecipeIds(next: string[]) {
-    setSelectedRecipeIds(next);
-    await setWeeklyPlanIds(next);
+  // Update the selected recipes and immediately rebuild the shopping list from
+  // them — there is no manual "Update list" step.
+  async function applySelectedRecipes(nextIds: string[]) {
+    const nextList = buildPreservedShoppingList(nextIds, recipesById, items);
+    setSelectedRecipeIds(nextIds);
+    setItems(nextList);
+    setEditingId(null);
+    setAddingSection(null);
+    await Promise.all([setWeeklyPlanIds(nextIds), saveShoppingList(nextList)]);
   }
 
   function toggleCheck(id: string) {
@@ -205,10 +241,6 @@ export default function ShoppingPage() {
     setCollapsedSections(next);
   }
 
-  function clearChecked() {
-    void persist(items.filter((item) => !item.checked));
-  }
-
   function clearAll() {
     if (!confirm("Clear all shopping items?")) return;
     void persist([]);
@@ -216,33 +248,18 @@ export default function ShoppingPage() {
 
   function addSelectedRecipe(id: string) {
     if (selectedRecipeIds.includes(id)) return;
-
-    const nextSelectedRecipeIds = [...selectedRecipeIds, id];
     setRecipePickerQuery("");
-    void persistSelectedRecipeIds(nextSelectedRecipeIds);
+    void applySelectedRecipes([...selectedRecipeIds, id]);
   }
 
   function removeSelectedRecipe(id: string) {
-    void persistSelectedRecipeIds(selectedRecipeIds.filter((recipeId) => recipeId !== id));
+    void applySelectedRecipes(selectedRecipeIds.filter((recipeId) => recipeId !== id));
   }
 
   function clearSelectedRecipes() {
     setRecipePickerOpen(false);
     setRecipePickerQuery("");
-    void persistSelectedRecipeIds([]);
-  }
-
-  async function buildListFromSelection() {
-    setBuildingList(true);
-    try {
-      const list = mergeIngredients(selectedRecipes);
-      setCollapsedSections(new Set());
-      setEditingId(null);
-      setAddingSection(null);
-      await persist(list);
-    } finally {
-      setBuildingList(false);
-    }
+    void applySelectedRecipes([]);
   }
 
   function getSortMetricsForItem(item: ShoppingListItem) {
@@ -355,15 +372,6 @@ export default function ShoppingPage() {
               Clear all
             </button>
           )}
-          {checkedCount > 0 && (
-            <button
-              onClick={clearChecked}
-              className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
-            >
-              <Trash2 size={13} />
-              Clear {checkedCount}
-            </button>
-          )}
         </div>
       </div>
 
@@ -372,8 +380,8 @@ export default function ShoppingPage() {
           <div>
             <h2 className="text-sm font-semibold text-gray-900">Recipes</h2>
             <p className="text-sm text-gray-500 mt-1">
-              Search and select recipes, then build the shopping list from the ones
-              you want.
+              Search and select recipes — the shopping list updates automatically
+              as you add or remove them.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -387,19 +395,6 @@ export default function ShoppingPage() {
                 Clear selected
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => void buildListFromSelection()}
-              disabled={selectedRecipes.length === 0 || buildingList}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <ShoppingCart size={15} />
-              {buildingList
-                ? "Updating..."
-                : items.length === 0
-                  ? "Build list"
-                  : "Update list"}
-            </button>
           </div>
         </div>
 
@@ -527,7 +522,7 @@ export default function ShoppingPage() {
           <ShoppingCart size={48} className="mx-auto text-gray-300 mb-4" />
           <h2 className="text-lg font-semibold text-gray-500">No shopping list yet</h2>
           <p className="text-sm text-gray-400 mt-1">
-            Select recipes above, then build the list.
+            Select recipes above and your list builds automatically.
           </p>
         </div>
       ) : (
