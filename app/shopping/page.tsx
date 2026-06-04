@@ -23,7 +23,6 @@ import PageLoadingScreen from "@/components/PageLoadingScreen";
 import { v4 as uuidv4 } from "uuid";
 import {
   Check,
-  CheckSquare2,
   ChevronDown,
   ChevronRight,
   Edit2,
@@ -31,7 +30,6 @@ import {
   Plus,
   Search,
   ShoppingCart,
-  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -47,7 +45,6 @@ export default function ShoppingPage() {
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
   const [recipePickerOpen, setRecipePickerOpen] = useState(false);
   const [recipePickerQuery, setRecipePickerQuery] = useState("");
-  const [checklistMode, setChecklistMode] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBuf, setEditBuf] = useState({ quantity: "", unit: "", name: "" });
@@ -367,26 +364,6 @@ export default function ShoppingPage() {
               Clear {checkedCount}
             </button>
           )}
-          <button
-            onClick={() => setChecklistMode((value) => !value)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-              checklistMode
-                ? "bg-brand-600 text-white"
-                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-            }`}
-          >
-            {checklistMode ? (
-              <>
-                <CheckSquare2 size={16} />
-                Check mode
-              </>
-            ) : (
-              <>
-                <Square size={16} />
-                Check mode
-              </>
-            )}
-          </button>
         </div>
       </div>
 
@@ -581,7 +558,7 @@ export default function ShoppingPage() {
             </select>
           </div>
 
-          {checklistMode && totalCount > 0 && (
+          {totalCount > 0 && (
             <div className="bg-gray-100 rounded-full h-2 overflow-hidden">
               <div
                 className="bg-brand-500 h-2 rounded-full transition-all"
@@ -622,7 +599,7 @@ export default function ShoppingPage() {
                           {sectionItems.length}
                         </span>
                       </div>
-                      {checklistMode && sectionChecked > 0 && (
+                      {sectionChecked > 0 && (
                         <span className="text-xs text-brand-600 font-medium">
                           {sectionChecked}/{sectionItems.length}
                         </span>
@@ -638,20 +615,19 @@ export default function ShoppingPage() {
                               item.checked ? "bg-gray-50" : ""
                             }`}
                           >
-                            {checklistMode && (
-                              <button
-                                onClick={() => toggleCheck(item.id)}
-                                className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
-                                  item.checked
-                                    ? "bg-brand-500 border-brand-500"
-                                    : "border-gray-300 hover:border-brand-400"
-                                }`}
-                              >
-                                {item.checked && (
-                                  <Check size={13} className="text-white" />
-                                )}
-                              </button>
-                            )}
+                            <button
+                              onClick={() => toggleCheck(item.id)}
+                              className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
+                                item.checked
+                                  ? "bg-brand-500 border-brand-500"
+                                  : "border-gray-300 hover:border-brand-400"
+                              }`}
+                              aria-label={item.checked ? "Uncheck item" : "Check item"}
+                            >
+                              {item.checked && (
+                                <Check size={13} className="text-white" />
+                              )}
+                            </button>
 
                             {editingId === item.id ? (
                               <div className="flex-1 flex gap-2 items-center">
@@ -726,7 +702,7 @@ export default function ShoppingPage() {
                               </div>
                             )}
 
-                            {!checklistMode && editingId !== item.id && (
+                            {editingId !== item.id && (
                               <div className="flex items-center gap-1 shrink-0">
                                 <button
                                   onClick={() => startEdit(item)}
@@ -742,21 +718,10 @@ export default function ShoppingPage() {
                                 </button>
                               </div>
                             )}
-
-                            {checklistMode && (
-                              <button
-                                onClick={() => removeItem(item.id)}
-                                className="p-1.5 text-gray-300 hover:text-red-400 transition-colors shrink-0"
-                              >
-                                <X size={14} />
-                              </button>
-                            )}
                           </li>
                         ))}
 
-                        {!checklistMode && (
-                          <>
-                            {addingSection === section ? (
+                        {addingSection === section ? (
                               <li className="px-4 py-2 flex gap-2 items-center bg-brand-50">
                                 <input
                                   autoFocus
@@ -822,8 +787,6 @@ export default function ShoppingPage() {
                                 </button>
                               </li>
                             )}
-                          </>
-                        )}
                       </ul>
                     )}
                   </div>

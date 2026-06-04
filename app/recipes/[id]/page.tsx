@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { buildMyNetDiaryRecipeExport } from "@/lib/mynetdiary";
 import { Recipe } from "@/lib/types";
@@ -33,11 +33,13 @@ import {
   RefreshCw,
 } from "lucide-react";
 
-const PRICING_CACHE_PREFIX = "cooking-be-easy-grocery-pricing-v2";
-const PRICING_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
+// The grocery price estimate is computed once per recipe and stored locally. It
+// is never refreshed automatically (not on edits, not on a timer) — only the
+// Refresh button recomputes it and overwrites the stored value.
+const PRICING_CACHE_PREFIX = "cooking-be-easy-grocery-pricing-v3";
 
-function buildPricingCacheKey(recipe: Recipe): string {
-  return [PRICING_CACHE_PREFIX, recipe.id, recipe.updatedAt].join(":");
+function buildPricingCacheKey(recipeId: string): string {
+  return `${PRICING_CACHE_PREFIX}:${recipeId}`;
 }
 
 function parseCachedPricing(rawValue: string | null): RecipePriceEstimate | null {
@@ -45,9 +47,7 @@ function parseCachedPricing(rawValue: string | null): RecipePriceEstimate | null
 
   try {
     const parsed = JSON.parse(rawValue) as RecipePriceEstimate;
-    const estimatedAt = Date.parse(parsed.estimatedAt);
-    if (!Number.isFinite(estimatedAt)) return null;
-    if (Date.now() - estimatedAt > PRICING_CACHE_TTL_MS) return null;
+    if (!parsed || typeof parsed.estimatedAt !== "string") return null;
     return parsed;
   } catch {
     return null;
@@ -69,7 +69,7 @@ export default function RecipeDetailPage() {
   const [pricingLoading, setPricingLoading] = useState(false);
   const [pricingRefreshing, setPricingRefreshing] = useState(false);
   const [pricingError, setPricingError] = useState("");
-  const [pricingRefreshNonce, setPricingRefreshNonce] = useState(0);
+  const activePricingRecipeIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     getRecipe(id).then((r) => {
@@ -83,38 +83,25 @@ export default function RecipeDetailPage() {
     });
   }, [id, router]);
 
-  useEffect(() => {
-    if (!recipe) {
-      setPricingLoading(false);
-      setPricingRefreshing(false);
-      return;
-    }
+  const loadOrComputePricing = useCallback(
+    async (targetRecipe: Recipe, mode: "auto" | "manual") => {
+      const targetId = targetRecipe.id;
+      const cacheKey = buildPricingCacheKey(targetId);
+      const isStale = () => activePricingRecipeIdRef.current !== targetId;
 
-    const currentRecipe = recipe;
-    let cancelled = false;
-    const recipeSnapshot = {
-      name: currentRecipe.name,
-      ingredients: currentRecipe.ingredients,
-      updatedAt: currentRecipe.updatedAt,
-      id: currentRecipe.id,
-    };
-    const hasExistingEstimate = priceEstimate !== null;
-    const isManualRefresh = pricingRefreshNonce > 0;
-
-    async function loadPricing() {
-      const cacheKey = buildPricingCacheKey(currentRecipe);
-      if (!isManualRefresh && !dirty && typeof window !== "undefined") {
+      // Auto mode: show the stored estimate if one exists and never recompute.
+      if (mode === "auto" && typeof window !== "undefined") {
         const cached = parseCachedPricing(window.localStorage.getItem(cacheKey));
         if (cached) {
-          setPriceEstimate(cached);
-          setPricingError("");
-          setPricingLoading(false);
-          setPricingRefreshing(false);
+          if (!isStale()) {
+            setPriceEstimate(cached);
+            setPricingError("");
+          }
           return;
         }
       }
 
-      if (hasExistingEstimate) {
+      if (mode === "manual") {
         setPricingRefreshing(true);
       } else {
         setPricingLoading(true);
@@ -124,12 +111,10 @@ export default function RecipeDetailPage() {
       try {
         const response = await fetch("/api/recipe-pricing", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            recipeName: recipeSnapshot.name,
-            ingredients: recipeSnapshot.ingredients,
+            recipeName: targetRecipe.name,
+            ingredients: targetRecipe.ingredients,
           }),
         });
 
@@ -142,37 +127,49 @@ export default function RecipeDetailPage() {
           );
         }
 
-        if (cancelled) return;
+        if (isStale()) return;
         setPriceEstimate(data as RecipePriceEstimate);
         setPricingError("");
 
-        if (!dirty && typeof window !== "undefined") {
+        if (typeof window !== "undefined") {
           window.localStorage.setItem(cacheKey, JSON.stringify(data));
         }
       } catch (error) {
-        if (cancelled) return;
+        if (isStale()) return;
         setPricingError(
           error instanceof Error
             ? error.message
             : "Failed to estimate ingredient prices"
         );
       } finally {
-        if (cancelled) return;
-        setPricingLoading(false);
-        setPricingRefreshing(false);
+        if (!isStale()) {
+          setPricingLoading(false);
+          setPricingRefreshing(false);
+        }
       }
+    },
+    []
+  );
+
+  // Load the stored estimate once when the recipe opens, computing it a single
+  // time if none exists yet. Editing ingredients does NOT trigger a recompute.
+  useEffect(() => {
+    if (!recipe) {
+      activePricingRecipeIdRef.current = null;
+      setPricingLoading(false);
+      setPricingRefreshing(false);
+      return;
     }
 
-    loadPricing();
+    activePricingRecipeIdRef.current = recipe.id;
+    void loadOrComputePricing(recipe, "auto");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recipe?.id, loadOrComputePricing]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    pricingRefreshNonce,
-    recipe?.id,
-    recipe?.updatedAt,
-  ]);
+  function refreshPricing() {
+    if (!recipe) return;
+    void loadOrComputePricing(recipe, "manual");
+  }
 
   function updateIngredients(ingredients: Recipe["ingredients"]) {
     if (!recipe) return;
@@ -239,6 +236,17 @@ export default function RecipeDetailPage() {
       const estimate = estimatesById.get(ingredient.id);
 
       if (estimate?.adjustedPriceText) {
+        if (estimate.source === "receipt") {
+          acc[ingredient.id] = {
+            label: `${estimate.adjustedPriceText} from receipt`,
+            detail:
+              estimate.explanation ??
+              [estimate.matchStore, estimate.packageSizeText].filter(Boolean).join(" · "),
+            href: estimate.matchUrl,
+          };
+          return acc;
+        }
+
         const detailParts = [
           estimate.matchTitle,
           estimate.matchStore,
@@ -275,7 +283,7 @@ export default function RecipeDetailPage() {
       if (dirty) {
         acc[ingredient.id] = {
           label: "Estimate may be stale",
-          detail: "Save or refresh to update this ingredient price.",
+          detail: "Tap Refresh to update this ingredient price.",
         };
       }
 
@@ -293,7 +301,7 @@ export default function RecipeDetailPage() {
     typeof navigator.share === "function" &&
     Boolean(recipeSourceUrl);
   const pricingSummary =
-    "Estimated from USDA produce averages and Claude-estimated US grocery prices, adjusted to this recipe's ingredient quantities.";
+    "Prices come from your receipt photos — scaled by price-per-quantity to this recipe's amounts. USDA produce averages and Claude estimates fill in only what your receipts don't cover. Calculated once; tap Refresh to recompute.";
 
   async function copyMyNetDiaryExport() {
     try {
@@ -460,7 +468,7 @@ export default function RecipeDetailPage() {
           </div>
           <button
             type="button"
-            onClick={() => setPricingRefreshNonce((value) => value + 1)}
+            onClick={refreshPricing}
             disabled={pricingLoading || pricingRefreshing}
             className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
           >
@@ -493,7 +501,7 @@ export default function RecipeDetailPage() {
 
         {dirty && (
           <p className="mt-3 text-xs text-amber-700">
-            Ingredient edits are not reflected until you save or refresh the estimate.
+            Ingredient edits aren&apos;t reflected in the price until you tap Refresh.
           </p>
         )}
 

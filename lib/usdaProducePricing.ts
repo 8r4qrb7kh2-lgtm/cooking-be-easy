@@ -473,6 +473,7 @@ function buildUsdaProduceEstimate(params: {
     confidence: clampConfidence(0.55 + coverage * 0.35),
     explanation: `USDA ERS national average retail price for fresh ${row.itemName.toLowerCase()}.`,
     unavailableReason: null,
+    source: "usda",
   };
 }
 

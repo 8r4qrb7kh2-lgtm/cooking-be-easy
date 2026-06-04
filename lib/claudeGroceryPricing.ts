@@ -2,36 +2,40 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Ingredient, ReceiptItem } from "@/lib/types";
 import { IngredientPriceEstimate } from "@/lib/recipePricing";
 
-const CLAUDE_PRICING_MODEL = "claude-sonnet-4-5-20250929";
+const CLAUDE_PRICING_MODEL = "claude-sonnet-4-6";
 const CLAUDE_PRICING_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 
 const anthropic = process.env.ANTHROPIC_API_KEY?.trim() ? new Anthropic() : null;
 
-interface ClaudePriceEntry {
+/**
+ * Claude's contribution to pricing is now two-fold:
+ *   1. MATCH each recipe ingredient to the most applicable receipt line (by id),
+ *      so the app can deterministically compute the price from that receipt.
+ *   2. ESTIMATE a typical US grocery cost as a fallback used only when there is
+ *      no receipt match (or the receipt math cannot be reconciled).
+ */
+export interface ClaudePricingEntry {
   ingredientId: string;
+  matchedReceiptItemId: string | null;
   matchTitle: string;
   packageSizeText: string;
-  packagePrice: number | null;
-  adjustedPrice: number | null;
+  estimatePrice: number | null;
+  estimatePackagePrice: number | null;
   confidence: number | null;
   explanation: string;
   unavailableReason: string | null;
-  source: "receipt" | "estimate";
-  matchedReceiptItemId: string | null;
 }
 
 interface CacheEntry {
   expiresAt: number;
-  value: Promise<Map<string, ClaudePriceEntry>>;
+  value: Promise<Map<string, ClaudePricingEntry>>;
 }
 
 const claudePricingCache = new Map<string, CacheEntry>();
 
 function getCacheKey(ingredients: Ingredient[], receiptLibrary: ReceiptItem[]): string {
   const ingredientKey = ingredients
-    .map((i) =>
-      [i.id, i.name.toLowerCase(), i.quantity, i.unit, i.section].join(":")
-    )
+    .map((i) => [i.id, i.name.toLowerCase(), i.quantity, i.unit, i.section].join(":"))
     .join("|");
   const libraryKey = receiptLibrary
     .map((r) => [r.id, r.totalPrice, r.purchasedAt ?? ""].join(":"))
@@ -95,132 +99,94 @@ function hasUsefulQuantity(ingredient: Ingredient): boolean {
   return /[0-9]/.test(quantity) || /pinch|dash|splash|handful/i.test(quantity);
 }
 
-function parseClaudeResponse(text: string): ClaudePriceEntry[] {
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error("Could not parse Claude pricing response");
-  }
+const PRICING_TOOL: Anthropic.Tool = {
+  name: "submit_pricing",
+  description:
+    "Submit, for every ingredient, the matching receipt-item id (if any) and a fallback typical US grocery price estimate.",
+  input_schema: {
+    type: "object",
+    properties: {
+      estimates: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            ingredientId: { type: "string", description: "Exact id from the input." },
+            matchedReceiptItemId: {
+              type: "string",
+              description:
+                "Id of the receipt item that is the same grocery product as this ingredient (brand-agnostic, compatible form). Empty string if none applies.",
+            },
+            matchTitle: {
+              type: "string",
+              description: "Generic grocery product name, lowercase, no brand.",
+            },
+            packageSizeText: {
+              type: "string",
+              description: "Typical package size, e.g. '16 oz box'. Empty if unknown.",
+            },
+            estimatePrice: {
+              type: "number",
+              description:
+                "Fallback cost in USD of ONLY the recipe's quantity using typical US grocery averages. 0 only if truly unknowable.",
+            },
+            estimatePackagePrice: {
+              type: "number",
+              description: "Typical full-package price in USD. 0 if unknown.",
+            },
+            confidence: { type: "number", description: "0.0 to 1.0" },
+            explanation: { type: "string", description: "One short sentence on the estimate basis." },
+            unavailableReason: {
+              type: "string",
+              description: "Empty if you returned a price; else why it is unknowable.",
+            },
+          },
+          required: ["ingredientId", "matchedReceiptItemId", "estimatePrice"],
+        },
+      },
+    },
+    required: ["estimates"],
+  },
+};
 
-  const parsed = JSON.parse(jsonMatch[0]) as {
-    estimates?: Array<{
-      ingredientId?: unknown;
-      matchTitle?: unknown;
-      packageSizeText?: unknown;
-      packagePrice?: unknown;
-      adjustedPrice?: unknown;
-      confidence?: unknown;
-      explanation?: unknown;
-      unavailableReason?: unknown;
-      source?: unknown;
-      matchedReceiptItemId?: unknown;
-    }>;
-  };
+function buildSystemPrompt(hasReceipts: boolean): string {
+  return `You are a grocery pricing expert with deep knowledge of typical US national supermarket averages across Walmart, Kroger, Safeway, Publix, and regional chains as of 2025.
 
-  if (!Array.isArray(parsed.estimates)) {
-    return [];
-  }
+You have TWO jobs for each recipe ingredient:
 
-  const results: ClaudePriceEntry[] = [];
-  for (const entry of parsed.estimates) {
-    if (!entry || typeof entry !== "object") continue;
-    if (typeof entry.ingredientId !== "string" || !entry.ingredientId) continue;
+1. MATCH TO A RECEIPT (only if a receipt library is provided):
+${
+  hasReceipts
+    ? `- Find the receipt item that is the SAME GROCERY PRODUCT this ingredient calls for (same food, compatible form). Brand differences are OK (tamari ↔ soy sauce, baby bella ↔ mushrooms).
+- Set matchedReceiptItemId to that receipt item's exact id. If none of the receipt items is the same product, set it to "" (empty string).
+- The app itself computes the actual paid price from the matched receipt's price-per-quantity — you do NOT need to scale receipt prices.`
+    : `- No receipt library was provided, so set matchedReceiptItemId to "" for every ingredient.`
+}
 
-    const packagePrice = sanitizeNumber(entry.packagePrice);
-    const adjustedPrice = sanitizeNumber(entry.adjustedPrice);
-    const confidenceRaw = sanitizeNumber(entry.confidence);
-    const unavailableReason =
-      typeof entry.unavailableReason === "string" && entry.unavailableReason.trim()
-        ? entry.unavailableReason.trim()
-        : null;
+2. ESTIMATE A FALLBACK PRICE (always):
+- estimatePrice = cost in USD of ONLY the recipe's quantity using typical US grocery averages (e.g. recipe wants 2 tbsp of a soy sauce bottle → ~0.13).
+- estimatePackagePrice = typical full-package price.
+- This estimate is used ONLY when there is no receipt match, so always provide a realistic number anyway.
 
-    const sourceRaw = (entry as { source?: unknown }).source;
-    const source: "receipt" | "estimate" = sourceRaw === "receipt" ? "receipt" : "estimate";
-    const matchedIdRaw = (entry as { matchedReceiptItemId?: unknown }).matchedReceiptItemId;
-    const matchedReceiptItemId =
-      typeof matchedIdRaw === "string" && matchedIdRaw.trim() ? matchedIdRaw.trim() : null;
+Rules for estimatePrice:
+- A pinch of salt, 1 bay leaf, or 1/4 tsp of a common spice is pennies — use 0.02-0.15.
+- Small amounts of pantry staples (flour, sugar, oil): a proportion of the package price.
+- Fresh produce by count or bunch: scale appropriately.
+- Meat/seafood: price for the exact weight needed.
+- Round to 2 decimals. Return 0 only if the quantity is truly unknowable (e.g. "to taste").
 
-    results.push({
-      ingredientId: entry.ingredientId,
-      matchTitle:
-        typeof entry.matchTitle === "string" && entry.matchTitle.trim()
-          ? entry.matchTitle.trim()
-          : "Grocery estimate",
-      packageSizeText:
-        typeof entry.packageSizeText === "string" && entry.packageSizeText.trim()
-          ? entry.packageSizeText.trim()
-          : "typical grocery package",
-      packagePrice,
-      adjustedPrice,
-      confidence: confidenceRaw !== null ? clampConfidence(confidenceRaw) : null,
-      explanation:
-        typeof entry.explanation === "string" && entry.explanation.trim()
-          ? entry.explanation.trim()
-          : "Claude estimate based on typical US grocery prices.",
-      unavailableReason,
-      source,
-      matchedReceiptItemId,
-    });
-  }
-
-  return results;
+Call submit_pricing with one entry per ingredient, matching ingredientId exactly.`;
 }
 
 async function callClaudeForPricing(
   ingredients: Ingredient[],
   receiptLibrary: ReceiptItem[]
-): Promise<Map<string, ClaudePriceEntry>> {
+): Promise<Map<string, ClaudePricingEntry>> {
   if (!anthropic) {
     throw new Error("ANTHROPIC_API_KEY is not configured");
   }
 
   const hasReceipts = receiptLibrary.length > 0;
-
-  const systemPrompt = `You are a grocery pricing expert with deep knowledge of typical US national supermarket averages across Walmart, Kroger, Safeway, Publix, and regional chains as of 2025.
-
-Your job: estimate the cost of specific recipe ingredient quantities.
-
-PRICING PRIORITY — USE THE USER'S RECEIPT LIBRARY WHEN APPLICABLE:
-- If the user has provided receipt items (the "receiptLibrary" below), match each recipe ingredient against the most recent applicable receipt item.
-- A receipt-library match is applicable when the receipt item is the SAME GROCERY PRODUCT the recipe ingredient calls for (same food, compatible form). Brand differences are OK.
-- When you use a receipt match: set source="receipt", set matchedReceiptItemId to that item's id, use its totalPrice as the packagePrice basis, and scale adjustedPrice by (recipe quantity) / (receipt item quantity or its package size).
-- Otherwise set source="estimate" and fall back to typical US grocery averages.
-
-For EACH ingredient, output:
-- source: "receipt" or "estimate"
-- matchedReceiptItemId: the receipt item id when source="receipt", else null
-- packagePrice: cost of one typical grocery package (from receipt or typical)
-- adjustedPrice: cost of ONLY the recipe's quantity (e.g. recipe wants 2 tbsp of a 15 oz soy-sauce bottle the user paid $3.25 for → adjustedPrice ≈ 0.13)
-- packageSizeText: short description of the package priced (e.g., "1 bunch", "16 oz box", or the receipt's packageSizeText)
-- matchTitle: generic grocery product name (lowercase, no brand)
-- confidence: 0.0–1.0
-- explanation: one short sentence about the price source/logic. For receipt matches, reference the store and purchase date (e.g. "based on Whole Foods Market receipt 2026-04-23, $3.25 for 15 fl oz tamari, used 2 tbsp")
-- unavailableReason: null if you returned a price
-
-Rules for adjustedPrice:
-- A pinch of salt, 1 bay leaf, or 1/4 tsp of a common spice is pennies — use 0.02-0.15
-- Small amounts of pantry staples (flour, sugar, oil): proportion of package price
-- Fresh produce by count or bunch: scale appropriately (2 scallions out of a bunch of 8 from a $1.99 bunch ≈ $0.50)
-- Meat/seafood: price for the exact weight needed
-- Always return a realistic USD number; round to 2 decimals
-- Return null ONLY if quantity is truly unknowable (e.g., "to taste" with no practical equivalent)
-
-Output ONLY valid JSON, no commentary, no markdown fences:
-{
-  "estimates": [
-    {
-      "ingredientId": "exact id from input",
-      "source": "receipt" | "estimate",
-      "matchedReceiptItemId": "receipt-item-uuid or null",
-      "matchTitle": "generic product name",
-      "packageSizeText": "15 fl oz bottle",
-      "packagePrice": 3.25,
-      "adjustedPrice": 0.13,
-      "confidence": 0.9,
-      "explanation": "based on Whole Foods receipt 2026-04-23, $3.25 for 15 fl oz tamari, used 2 tbsp",
-      "unavailableReason": null
-    }
-  ]
-}`;
 
   const userPayload = ingredients.map((ingredient) => ({
     ingredientId: ingredient.id,
@@ -245,57 +211,66 @@ Output ONLY valid JSON, no commentary, no markdown fences:
   }));
 
   const userContent = hasReceipts
-    ? `Price every ingredient below. Prefer matches from the user's receipt library when applicable.\n\nreceiptLibrary:\n${JSON.stringify(receiptPayload, null, 2)}\n\ningredients:\n${JSON.stringify(userPayload, null, 2)}\n\nReturn one estimate per ingredient, matching ingredientId exactly.`
-    : `Price every ingredient below. The user has no receipt library yet, so use typical US grocery averages.\n\ningredients:\n${JSON.stringify(userPayload, null, 2)}\n\nReturn one estimate per ingredient (source="estimate", matchedReceiptItemId=null), matching ingredientId exactly.`;
+    ? `Match each ingredient to the most applicable receipt item id, and provide a fallback estimate.\n\nreceiptLibrary:\n${JSON.stringify(receiptPayload, null, 2)}\n\ningredients:\n${JSON.stringify(userPayload, null, 2)}\n\nReturn one entry per ingredient, matching ingredientId exactly.`
+    : `The user has no receipt library yet. Set matchedReceiptItemId to "" for every ingredient and estimate typical US grocery prices.\n\ningredients:\n${JSON.stringify(userPayload, null, 2)}\n\nReturn one entry per ingredient, matching ingredientId exactly.`;
 
   const message = await anthropic.messages.create({
     model: CLAUDE_PRICING_MODEL,
     max_tokens: 8192,
-    system: systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: userContent,
-      },
-    ],
+    system: buildSystemPrompt(hasReceipts),
+    tools: [PRICING_TOOL],
+    tool_choice: { type: "tool", name: "submit_pricing" },
+    messages: [{ role: "user", content: userContent }],
   });
 
-  const textBlock = message.content.find((block) => block.type === "text");
-  const text = textBlock && textBlock.type === "text" ? textBlock.text : "";
+  const toolUse = message.content.find((block) => block.type === "tool_use");
+  if (!toolUse || toolUse.type !== "tool_use") {
+    throw new Error("Claude did not return pricing tool output");
+  }
 
-  const parsed = parseClaudeResponse(text);
-  return new Map(parsed.map((entry) => [entry.ingredientId, entry]));
-}
-
-function buildEstimateFromClaude(
-  ingredient: Ingredient,
-  entry: ClaudePriceEntry,
-  receiptById: Map<string, ReceiptItem>
-): IngredientPriceEstimate {
-  const adjustedPrice = entry.adjustedPrice !== null ? roundToCents(entry.adjustedPrice) : null;
-  const packagePrice = entry.packagePrice !== null ? roundToCents(entry.packagePrice) : null;
-  const matchedReceipt = entry.matchedReceiptItemId
-    ? receiptById.get(entry.matchedReceiptItemId) ?? null
-    : null;
-  const isReceiptMatch = entry.source === "receipt" && matchedReceipt !== null;
-
-  return {
-    ingredientId: ingredient.id,
-    ingredientName: ingredient.name,
-    quantity: ingredient.quantity,
-    unit: ingredient.unit,
-    adjustedPrice,
-    adjustedPriceText: adjustedPrice !== null ? formatUsd(adjustedPrice) : null,
-    packagePrice,
-    packagePriceText: packagePrice !== null ? formatUsd(packagePrice) : null,
-    packageSizeText: entry.packageSizeText,
-    matchTitle: entry.matchTitle,
-    matchStore: isReceiptMatch ? matchedReceipt?.storeName : undefined,
-    matchUrl: undefined,
-    confidence: entry.confidence ?? (isReceiptMatch ? 0.9 : 0.7),
-    explanation: entry.explanation,
-    unavailableReason: adjustedPrice === null ? entry.unavailableReason ?? null : null,
+  const parsed = toolUse.input as {
+    estimates?: Array<Record<string, unknown>>;
   };
+  const estimates = Array.isArray(parsed.estimates) ? parsed.estimates : [];
+
+  const results = new Map<string, ClaudePricingEntry>();
+  for (const entry of estimates) {
+    if (!entry || typeof entry !== "object") continue;
+    const ingredientId = entry.ingredientId;
+    if (typeof ingredientId !== "string" || !ingredientId) continue;
+
+    const matchedIdRaw = entry.matchedReceiptItemId;
+    const matchedReceiptItemId =
+      typeof matchedIdRaw === "string" && matchedIdRaw.trim() ? matchedIdRaw.trim() : null;
+    const confidenceRaw = sanitizeNumber(entry.confidence);
+    const unavailableReason =
+      typeof entry.unavailableReason === "string" && entry.unavailableReason.trim()
+        ? entry.unavailableReason.trim()
+        : null;
+
+    results.set(ingredientId, {
+      ingredientId,
+      matchedReceiptItemId,
+      matchTitle:
+        typeof entry.matchTitle === "string" && entry.matchTitle.trim()
+          ? entry.matchTitle.trim()
+          : "grocery estimate",
+      packageSizeText:
+        typeof entry.packageSizeText === "string" && entry.packageSizeText.trim()
+          ? entry.packageSizeText.trim()
+          : "typical grocery package",
+      estimatePrice: sanitizeNumber(entry.estimatePrice),
+      estimatePackagePrice: sanitizeNumber(entry.estimatePackagePrice),
+      confidence: confidenceRaw !== null ? clampConfidence(confidenceRaw) : null,
+      explanation:
+        typeof entry.explanation === "string" && entry.explanation.trim()
+          ? entry.explanation.trim()
+          : "Estimated from typical US grocery prices.",
+      unavailableReason,
+    });
+  }
+
+  return results;
 }
 
 function buildNoQuantityEstimate(ingredient: Ingredient): IngredientPriceEstimate {
@@ -312,99 +287,80 @@ function buildNoQuantityEstimate(ingredient: Ingredient): IngredientPriceEstimat
     explanation: "No measurable quantity provided (e.g. to taste / as needed).",
     unavailableReason:
       "No measurable quantity provided — add a specific amount to get a price estimate.",
+    source: "estimate",
   };
 }
 
-function buildFailureEstimate(
+/** Convert a Claude pricing entry's fallback estimate into a price estimate. */
+export function buildEstimateFromClaudePricing(
   ingredient: Ingredient,
-  reason: string
+  entry: ClaudePricingEntry
 ): IngredientPriceEstimate {
+  const adjustedPrice =
+    entry.estimatePrice !== null ? roundToCents(entry.estimatePrice) : null;
+  const packagePrice =
+    entry.estimatePackagePrice !== null ? roundToCents(entry.estimatePackagePrice) : null;
+
   return {
     ingredientId: ingredient.id,
     ingredientName: ingredient.name,
     quantity: ingredient.quantity,
     unit: ingredient.unit,
-    adjustedPrice: null,
-    adjustedPriceText: null,
-    packagePrice: null,
-    packagePriceText: null,
-    confidence: null,
-    explanation: "Claude grocery pricing was unavailable for this ingredient.",
-    unavailableReason: reason,
+    adjustedPrice,
+    adjustedPriceText: adjustedPrice !== null ? formatUsd(adjustedPrice) : null,
+    packagePrice,
+    packagePriceText: packagePrice !== null ? formatUsd(packagePrice) : null,
+    packageSizeText: entry.packageSizeText,
+    matchTitle: entry.matchTitle,
+    matchStore: undefined,
+    matchUrl: undefined,
+    confidence: entry.confidence ?? 0.65,
+    explanation: entry.explanation,
+    unavailableReason:
+      adjustedPrice === null
+        ? entry.unavailableReason ?? "No estimate available for this ingredient."
+        : null,
+    source: "estimate",
   };
 }
 
-export async function estimateIngredientsWithClaude(
+/**
+ * Resolve Claude pricing entries (receipt matches + fallback estimates) for the
+ * given ingredients. Items with no measurable quantity are returned directly as
+ * unavailable estimates and excluded from the Claude call.
+ */
+export async function resolveClaudePricing(
   ingredients: Ingredient[],
   receiptLibrary: ReceiptItem[] = []
-): Promise<Map<string, IngredientPriceEstimate>> {
-  const results = new Map<string, IngredientPriceEstimate>();
-
+): Promise<{
+  entries: Map<string, ClaudePricingEntry>;
+  noQuantityEstimates: Map<string, IngredientPriceEstimate>;
+}> {
+  const noQuantityEstimates = new Map<string, IngredientPriceEstimate>();
   const pricable: Ingredient[] = [];
+
   for (const ingredient of ingredients) {
     if (hasUsefulQuantity(ingredient)) {
       pricable.push(ingredient);
     } else {
-      results.set(ingredient.id, buildNoQuantityEstimate(ingredient));
+      noQuantityEstimates.set(ingredient.id, buildNoQuantityEstimate(ingredient));
     }
   }
 
-  if (pricable.length === 0) {
-    return results;
+  if (pricable.length === 0 || !anthropic) {
+    return { entries: new Map(), noQuantityEstimates };
   }
-
-  if (!anthropic) {
-    for (const ingredient of pricable) {
-      results.set(
-        ingredient.id,
-        buildFailureEstimate(
-          ingredient,
-          "Claude grocery pricing is not configured (missing ANTHROPIC_API_KEY)."
-        )
-      );
-    }
-    return results;
-  }
-
-  const receiptById = new Map<string, ReceiptItem>(
-    receiptLibrary.map((item) => [item.id, item])
-  );
 
   try {
     const cacheKey = getCacheKey(pricable, receiptLibrary);
-    const priceMap = await getCached(claudePricingCache, cacheKey, () =>
+    const entries = await getCached(claudePricingCache, cacheKey, () =>
       callClaudeForPricing(pricable, receiptLibrary)
     );
-
-    for (const ingredient of pricable) {
-      const entry = priceMap.get(ingredient.id);
-      if (!entry) {
-        results.set(
-          ingredient.id,
-          buildFailureEstimate(
-            ingredient,
-            "Claude did not return a price estimate for this ingredient."
-          )
-        );
-        continue;
-      }
-      results.set(ingredient.id, buildEstimateFromClaude(ingredient, entry, receiptById));
-    }
+    return { entries, noQuantityEstimates };
   } catch (error) {
     console.error("Claude grocery pricing failed:", error);
-    const message = error instanceof Error ? error.message : "Unknown error";
-    for (const ingredient of pricable) {
-      results.set(
-        ingredient.id,
-        buildFailureEstimate(
-          ingredient,
-          `Claude grocery pricing request failed: ${message}`
-        )
-      );
-    }
+    return { entries: new Map(), noQuantityEstimates };
   }
-
-  return results;
 }
 
 export function isClaudePricingAvailable(): boolean {

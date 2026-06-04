@@ -21,6 +21,8 @@ export interface IngredientPriceEstimate {
   confidence: number | null;
   explanation?: string;
   unavailableReason?: string | null;
+  /** Where the price came from: a receipt photo, USDA averages, or a Claude estimate. */
+  source?: "receipt" | "usda" | "estimate";
 }
 
 export interface RecipePriceEstimate {

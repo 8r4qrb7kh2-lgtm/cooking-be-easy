@@ -6,7 +6,11 @@ import {
 import { Ingredient, ReceiptItem } from "@/lib/types";
 import { normalizeExactUnit } from "@/lib/unitConversion";
 import { estimateProduceIngredientPrice } from "@/lib/usdaProducePricing";
-import { estimateIngredientsWithClaude } from "@/lib/claudeGroceryPricing";
+import {
+  buildEstimateFromClaudePricing,
+  resolveClaudePricing,
+} from "@/lib/claudeGroceryPricing";
+import { priceIngredientFromReceiptItem } from "@/lib/receiptPricing";
 
 const VOLUME_UNITS = new Set([
   "cup",
@@ -159,42 +163,6 @@ function formatUsd(value: number): string {
   }).format(value);
 }
 
-function tokenSet(value: string): Set<string> {
-  return new Set(
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((token) => token.length > 2)
-  );
-}
-
-function hasPlausibleReceiptMatch(
-  ingredient: Ingredient,
-  receiptLibrary: ReceiptItem[]
-): boolean {
-  if (receiptLibrary.length === 0) return false;
-  const ingredientTokens = tokenSet(ingredient.name);
-  if (ingredientTokens.size === 0) return false;
-
-  for (const item of receiptLibrary) {
-    const itemTokens = tokenSet(item.normalizedName);
-    if (itemTokens.size === 0) continue;
-    let overlap = 0;
-    for (const token of itemTokens) {
-      if (ingredientTokens.has(token)) overlap += 1;
-    }
-    // Require at least 2 shared tokens OR 1 shared token when both strings are short.
-    if (
-      overlap >= 2 ||
-      (overlap >= 1 && itemTokens.size <= 3 && ingredientTokens.size <= 3)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 async function mapWithConcurrency<T, U>(
   items: T[],
   concurrency: number,
@@ -214,6 +182,23 @@ async function mapWithConcurrency<T, U>(
   const lanes = Array.from({ length: Math.min(concurrency, items.length) }, run);
   await Promise.all(lanes);
   return results;
+}
+
+function buildUnavailableEstimate(ingredient: Ingredient): IngredientPriceEstimate {
+  return {
+    ingredientId: ingredient.id,
+    ingredientName: ingredient.name,
+    quantity: ingredient.quantity,
+    unit: ingredient.unit,
+    adjustedPrice: null,
+    adjustedPriceText: null,
+    packagePrice: null,
+    packagePriceText: null,
+    confidence: null,
+    explanation: "No pricing source returned a result for this ingredient.",
+    unavailableReason: "No pricing source returned a result for this ingredient.",
+    source: "estimate",
+  };
 }
 
 export async function estimateRecipeWithWalmartSearch(
@@ -237,61 +222,72 @@ export async function estimateRecipeWithWalmartSearch(
     };
   }
 
-  // Tier 1: USDA ERS produce pricing for produce ingredients (authoritative national averages).
-  // Only use USDA when the user has NO receipts for that ingredient — receipts represent
-  // what the user actually paid, which is more relevant than national averages.
-  const produceResults = await mapWithConcurrency(ingredients, 4, async (ingredient) => {
-    if (ingredient.section !== "Produce") return null;
-    // Skip USDA if we have a plausible receipt match — Claude will use the receipt instead.
-    if (hasPlausibleReceiptMatch(ingredient, receiptLibrary)) return null;
-    try {
-      const estimate = await estimateProduceIngredientPrice(ingredient, buildSearchPlan(ingredient));
-      return estimate;
-    } catch (error) {
-      console.error("USDA produce pricing failed for ingredient:", ingredient.name, error);
-      return null;
-    }
-  });
+  // Resolve Claude matches (ingredient -> receipt item) + fallback estimates in one call.
+  const { entries, noQuantityEstimates } = await resolveClaudePricing(
+    ingredients,
+    receiptLibrary
+  );
+  const receiptById = new Map<string, ReceiptItem>(
+    receiptLibrary.map((item) => [item.id, item])
+  );
 
   const resolvedById = new Map<string, IngredientPriceEstimate>();
-  const needsClaude: Ingredient[] = [];
 
-  ingredients.forEach((ingredient, index) => {
-    const usdaEstimate = produceResults[index];
-    if (usdaEstimate && usdaEstimate.adjustedPrice !== null) {
-      resolvedById.set(ingredient.id, usdaEstimate);
-    } else {
-      needsClaude.push(ingredient);
+  // Tier 1 — RECEIPTS: deterministically price each ingredient matched to a
+  // receipt line using its price-per-quantity, scaled to the recipe amount.
+  await mapWithConcurrency(ingredients, 6, async (ingredient) => {
+    if (noQuantityEstimates.has(ingredient.id)) return;
+    const entry = entries.get(ingredient.id);
+    const receiptItem = entry?.matchedReceiptItemId
+      ? receiptById.get(entry.matchedReceiptItemId)
+      : undefined;
+    if (!receiptItem) return;
+
+    try {
+      const estimate = await priceIngredientFromReceiptItem(ingredient, receiptItem);
+      if (estimate && estimate.adjustedPrice !== null) {
+        resolvedById.set(ingredient.id, estimate);
+      }
+    } catch (error) {
+      console.error("Receipt pricing failed for ingredient:", ingredient.name, error);
     }
   });
 
-  // Tier 2: Claude-backed grocery pricing — uses the user's receipt library when available
-  // and falls back to typical US grocery averages for anything unmatched.
-  if (needsClaude.length > 0) {
-    const claudeEstimates = await estimateIngredientsWithClaude(needsClaude, receiptLibrary);
-    for (const ingredient of needsClaude) {
-      const estimate = claudeEstimates.get(ingredient.id);
-      if (estimate) {
+  // Tier 2 — USDA produce averages, only for produce ingredients with no receipt price.
+  await mapWithConcurrency(ingredients, 4, async (ingredient) => {
+    if (resolvedById.has(ingredient.id) || noQuantityEstimates.has(ingredient.id)) return;
+    if (ingredient.section !== "Produce") return;
+    try {
+      const estimate = await estimateProduceIngredientPrice(
+        ingredient,
+        buildSearchPlan(ingredient)
+      );
+      if (estimate && estimate.adjustedPrice !== null) {
         resolvedById.set(ingredient.id, estimate);
       }
+    } catch (error) {
+      console.error("USDA produce pricing failed for ingredient:", ingredient.name, error);
+    }
+  });
+
+  // Tier 3 — Claude estimate fallback for anything still unpriced.
+  for (const ingredient of ingredients) {
+    if (resolvedById.has(ingredient.id)) continue;
+
+    const noQuantity = noQuantityEstimates.get(ingredient.id);
+    if (noQuantity) {
+      resolvedById.set(ingredient.id, noQuantity);
+      continue;
+    }
+
+    const entry = entries.get(ingredient.id);
+    if (entry) {
+      resolvedById.set(ingredient.id, buildEstimateFromClaudePricing(ingredient, entry));
     }
   }
 
   const estimates: IngredientPriceEstimate[] = ingredients.map(
-    (ingredient) =>
-      resolvedById.get(ingredient.id) ?? {
-        ingredientId: ingredient.id,
-        ingredientName: ingredient.name,
-        quantity: ingredient.quantity,
-        unit: ingredient.unit,
-        adjustedPrice: null,
-        adjustedPriceText: null,
-        packagePrice: null,
-        packagePriceText: null,
-        confidence: null,
-        explanation: "No pricing source returned a result for this ingredient.",
-        unavailableReason: "No pricing source returned a result for this ingredient.",
-      }
+    (ingredient) => resolvedById.get(ingredient.id) ?? buildUnavailableEstimate(ingredient)
   );
 
   const totalAdjustedPrice = roundToCents(
