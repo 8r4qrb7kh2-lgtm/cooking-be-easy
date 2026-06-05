@@ -37,15 +37,22 @@ function describeReceiptLine(item: ReceiptItem): string {
 }
 
 /**
- * Deterministically compute the cost of a recipe ingredient's quantity from a
- * matched receipt line. The math is: derive a price-per-unit (per count, or
- * per gram once both sides are expressed in grams via the unit-conversion
- * system), then multiply by the recipe's quantity. Returns null when the
- * amounts cannot be reconciled reliably, so the caller can fall back.
+ * Compute the cost of a recipe ingredient's quantity from a matched receipt
+ * line. Two strategies, chosen by how the recipe is measured:
+ *   - Exact weight/volume ("2 tbsp", "200 g"): deterministic gram math — express
+ *     both sides in grams via the unit-conversion system and price by grams.
+ *   - Count, including no unit ("4" scallions, "3" cloves): use the model's
+ *     receiptFractionForRecipe — the share of the whole receipt line the recipe
+ *     uses — because bridging a count↔container mismatch (a few pieces out of a
+ *     bunch/head/package) needs the semantic "pieces per container" judgement
+ *     that only the model has.
+ * Returns null when the amounts cannot be reconciled reliably, so the caller can
+ * fall back to a USDA average or a Claude estimate.
  */
 export async function priceIngredientFromReceiptItem(
   ingredient: Ingredient,
-  item: ReceiptItem
+  item: ReceiptItem,
+  options: { receiptFractionForRecipe?: number | null } = {}
 ): Promise<IngredientPriceEstimate | null> {
   if (!Number.isFinite(item.totalPrice) || item.totalPrice <= 0) return null;
 
@@ -91,6 +98,30 @@ export async function priceIngredientFromReceiptItem(
       source: "receipt",
     };
   };
+
+  // The model estimates what share of the whole receipt line the recipe uses —
+  // the only reliable way to bridge a count↔container mismatch (a few
+  // scallions/cloves/sheets out of a bunch/head/package). Multiply that share by
+  // the price actually paid on the receipt.
+  const fraction = options.receiptFractionForRecipe;
+  const fractionEstimate = (): IngredientPriceEstimate | null => {
+    if (fraction === null || fraction === undefined) return null;
+    if (!Number.isFinite(fraction) || fraction <= 0 || fraction > 100) return null;
+    return buildEstimate({
+      adjustedPrice: fraction * item.totalPrice,
+      packagePrice: item.totalPrice,
+      confidence: 0.82,
+      method: `recipe uses ≈${Math.round(fraction * 100)}% of this purchase`,
+    });
+  };
+
+  // Recipe measured by count (incl. no unit): "how many pieces per container" is
+  // the dominant question, so prefer the model's share. Recipe measured by an
+  // exact weight/volume falls through to the more precise gram math below.
+  if (normalizeExactUnit(ingredient.unit) === null) {
+    const fromFraction = fractionEstimate();
+    if (fromFraction) return fromFraction;
+  }
 
   // Fast path: both sides counted in the same family (eggs, cans, cloves...).
   // Price scales directly by the count ratio with no weight assumptions.
@@ -144,5 +175,7 @@ export async function priceIngredientFromReceiptItem(
     });
   }
 
-  return null;
+  // Exact-measure recipe the gram math couldn't reconcile (e.g. an unusual
+  // receipt unit): fall back to the model's share of the line if it gave one.
+  return fractionEstimate();
 }

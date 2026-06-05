@@ -244,7 +244,9 @@ export async function estimateRecipeWithWalmartSearch(
     if (!receiptItem) return;
 
     try {
-      const estimate = await priceIngredientFromReceiptItem(ingredient, receiptItem);
+      const estimate = await priceIngredientFromReceiptItem(ingredient, receiptItem, {
+        receiptFractionForRecipe: entry?.receiptFractionForRecipe ?? null,
+      });
       if (estimate && estimate.adjustedPrice !== null) {
         resolvedById.set(ingredient.id, estimate);
       }

@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Ingredient, ReceiptItem } from "@/lib/types";
 import { IngredientPriceEstimate } from "@/lib/recipePricing";
 
-const CLAUDE_PRICING_MODEL = "claude-sonnet-4-5-20250929";
+const CLAUDE_PRICING_MODEL = "claude-opus-4-8";
 const CLAUDE_PRICING_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 
 const anthropic = process.env.ANTHROPIC_API_KEY?.trim() ? new Anthropic() : null;
@@ -17,6 +17,13 @@ const anthropic = process.env.ANTHROPIC_API_KEY?.trim() ? new Anthropic() : null
 export interface ClaudePricingEntry {
   ingredientId: string;
   matchedReceiptItemId: string | null;
+  /**
+   * Share of the ENTIRE matched receipt line (its totalPrice) that the recipe's
+   * full quantity consumes — e.g. 4 scallions from a ~7-stalk bunch ≈ 0.55. This
+   * is how the model bridges "recipe wants individual pieces, receipt is a
+   * container (bunch/head/package)". null when there is no receipt match.
+   */
+  receiptFractionForRecipe: number | null;
   matchTitle: string;
   packageSizeText: string;
   estimatePrice: number | null;
@@ -121,6 +128,11 @@ const PRICING_TOOL: Anthropic.Tool = {
               description:
                 "Id of the receipt item that is the same grocery product as this ingredient (brand-agnostic, compatible form). Empty string if none applies.",
             },
+            receiptFractionForRecipe: {
+              type: "number",
+              description:
+                "When matchedReceiptItemId is set: the share of that ENTIRE receipt line (which cost its totalPrice) that the recipe's full quantity uses. Receipts are often containers holding many recipe pieces — a recipe calling for individual pieces uses only a FRACTION. E.g. 4 scallions from a $0.99 bunch (~7 stalks) → ~0.55; 3 garlic cloves from a $1.73 head (~11 cloves) → ~0.27; 6 rice paper sheets from a $3.99 package (~30 sheets) → ~0.2. May exceed 1 if the recipe needs more than the whole line. 0 if no match.",
+            },
             matchTitle: {
               type: "string",
               description: "Generic grocery product name, lowercase, no brand.",
@@ -163,8 +175,15 @@ ${
   hasReceipts
     ? `- Find the receipt item that is the SAME GROCERY PRODUCT this ingredient calls for (same food, compatible form). Brand differences are OK (tamari ↔ soy sauce, baby bella ↔ mushrooms).
 - Set matchedReceiptItemId to that receipt item's exact id. If none of the receipt items is the same product, set it to "" (empty string).
-- The app itself computes the actual paid price from the matched receipt's price-per-quantity — you do NOT need to scale receipt prices.`
-    : `- No receipt library was provided, so set matchedReceiptItemId to "" for every ingredient.`
+- Then set receiptFractionForRecipe: the share of that ENTIRE receipt line (which cost its totalPrice) that the recipe's full quantity uses.
+  - CRITICAL — containers vs. pieces: grocery receipts are usually sold as CONTAINERS that hold many recipe pieces, so a recipe calling for a few pieces uses only a FRACTION of the line. Judge how many pieces a typical container holds, then divide:
+    • spring onions / scallions: a bunch ≈ 6-8 stalks → 4 stalks ≈ 0.55 of a $0.99 bunch
+    • garlic: a head / "large" garlic ≈ 10-12 cloves → 3 cloves ≈ 0.27 of one head
+    • rice paper: a package ≈ 25-40 sheets → 6 sheets ≈ 0.18 of a package
+    • persian cucumbers: a bag ≈ 5-6 → 4 ≈ 0.7 of a bag; herbs, celery, etc. follow the same logic
+  - A recipe quantity with NO unit (e.g. "4" spring onions, "3" garlic, "4" cucumbers) means that many INDIVIDUAL pieces — never that many whole bunches/heads/bags.
+  - Use the receipt line's quantity, unit, and packageSizeText to size the container; use the recipe's quantity and unit to size the need. If both are the same kind of measure (both a weight, or the same countable item like eggs or cans where the receipt count already reflects pieces), use the straightforward ratio. The value may exceed 1 if the recipe needs more than the whole line.`
+    : `- No receipt library was provided, so set matchedReceiptItemId to "" and receiptFractionForRecipe to 0 for every ingredient.`
 }
 
 2. ESTIMATE A FALLBACK PRICE (always):
@@ -255,6 +274,9 @@ async function callClaudeForPricing(
     results.set(ingredientId, {
       ingredientId,
       matchedReceiptItemId,
+      receiptFractionForRecipe: matchedReceiptItemId
+        ? sanitizeNumber(entry.receiptFractionForRecipe)
+        : null,
       matchTitle:
         typeof entry.matchTitle === "string" && entry.matchTitle.trim()
           ? entry.matchTitle.trim()
