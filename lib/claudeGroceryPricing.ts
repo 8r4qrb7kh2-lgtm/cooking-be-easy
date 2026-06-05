@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { Ingredient, ReceiptItem } from "@/lib/types";
 import { IngredientPriceEstimate } from "@/lib/recipePricing";
 
-const CLAUDE_PRICING_MODEL = "claude-sonnet-4-6";
+const CLAUDE_PRICING_MODEL = "claude-sonnet-4-5-20250929";
 const CLAUDE_PRICING_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 
 const anthropic = process.env.ANTHROPIC_API_KEY?.trim() ? new Anthropic() : null;
