@@ -89,6 +89,10 @@ function sanitizeNumber(value: unknown): number | null {
   return num;
 }
 
+// ASCII digits plus unicode vulgar fractions (¼ ½ ¾ ⅓ ⅔ ⅛ … U+00BC–U+00BE,
+// U+2150–U+215E) so quantities entered as "½" or "¾" count as real amounts.
+const NUMERIC_QUANTITY_PATTERN = /[0-9¼-¾⅐-⅞]/;
+
 function hasUsefulQuantity(ingredient: Ingredient): boolean {
   const quantity = ingredient.quantity?.trim().toLowerCase() ?? "";
   if (!quantity) return false;
@@ -96,7 +100,7 @@ function hasUsefulQuantity(ingredient: Ingredient): boolean {
   if (quantity === "as needed") return false;
   if (quantity === "optional") return false;
   if (quantity === "pinch" && !ingredient.unit) return true;
-  return /[0-9]/.test(quantity) || /pinch|dash|splash|handful/i.test(quantity);
+  return NUMERIC_QUANTITY_PATTERN.test(quantity) || /pinch|dash|splash|handful/i.test(quantity);
 }
 
 const PRICING_TOOL: Anthropic.Tool = {
