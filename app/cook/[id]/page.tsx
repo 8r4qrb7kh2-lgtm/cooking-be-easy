@@ -932,7 +932,7 @@ export default function CookingModePage() {
     <div className="max-w-5xl mx-auto pb-32">
       <div className="flex items-center gap-3 mb-6">
         <Link
-          href="/cook"
+          href={`/recipes/${id}`}
           className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors shrink-0"
         >
           <ArrowLeft size={20} />
