@@ -54,6 +54,21 @@ create table weekly_plans (
 );
 alter table weekly_plans enable row level security;
 
+-- Meal planner: one recipe planned into one meal slot (lunch/dinner) on one date
+create table meal_plan_entries (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  household_id uuid references households(id),
+  recipe_id text not null,
+  plan_date date not null,
+  slot text not null check (slot in ('lunch', 'dinner')),
+  created_at timestamptz not null default now()
+);
+alter table meal_plan_entries enable row level security;
+
+create unique index meal_plan_entries_owner_date_slot_recipe_key
+  on meal_plan_entries ((coalesce(household_id::text, user_id::text)), plan_date, slot, recipe_id);
+
 -- Shopping list
 create table shopping_list (
   id text primary key,
@@ -125,6 +140,13 @@ create policy "Users manage own or household recipes" on recipes for all
 
 -- Weekly plans: own or same household
 create policy "Users manage own or household plans" on weekly_plans for all
+  using (
+    auth.uid() = user_id
+    OR household_id IN (select household_id from household_members where user_id = auth.uid())
+  );
+
+-- Meal plan entries: own or same household
+create policy "Users manage own or household meal plan entries" on meal_plan_entries for all
   using (
     auth.uid() = user_id
     OR household_id IN (select household_id from household_members where user_id = auth.uid())

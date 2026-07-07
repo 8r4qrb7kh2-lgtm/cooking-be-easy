@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
     .update({ used_by: userId })
     .eq("id", invite.id);
 
-  // Migrate user's existing weekly_plans and shopping_list to use the household_id
+  // Migrate user's existing weekly_plans, shopping_list, and meal plan to the household_id
   await service
     .from("weekly_plans")
     .update({ household_id: invite.household_id })
@@ -79,6 +79,11 @@ export async function POST(request: NextRequest) {
 
   await service
     .from("shopping_list")
+    .update({ household_id: invite.household_id })
+    .eq("user_id", userId);
+
+  await service
+    .from("meal_plan_entries")
     .update({ household_id: invite.household_id })
     .eq("user_id", userId);
 

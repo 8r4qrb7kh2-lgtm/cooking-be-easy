@@ -39,6 +39,17 @@ export interface Recipe {
   updatedAt: string;
 }
 
+export const MEAL_SLOTS = ["lunch", "dinner"] as const;
+
+export type MealSlot = (typeof MEAL_SLOTS)[number];
+
+export interface MealPlanEntry {
+  id: string;
+  recipeId: string;
+  planDate: string; // YYYY-MM-DD (local calendar date)
+  slot: MealSlot;
+}
+
 export interface ShoppingListItem {
   id: string;
   name: string;

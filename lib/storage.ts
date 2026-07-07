@@ -220,6 +220,12 @@ export async function deleteRecipe(id: string): Promise<void> {
     .eq("recipe_id", id);
   if (planError) throw planError;
 
+  const { error: mealPlanError } = await supabase
+    .from("meal_plan_entries")
+    .delete()
+    .eq("recipe_id", id);
+  if (mealPlanError) throw mealPlanError;
+
   const { error } = await supabase.from("recipes").delete().eq("id", id);
   if (error) throw error;
 }

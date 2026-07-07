@@ -3,13 +3,14 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, ShoppingCart, Flame, LogOut, Users, Receipt } from "lucide-react";
+import { BookOpen, CalendarDays, ShoppingCart, Flame, LogOut, Users, Receipt } from "lucide-react";
 import { useAuth } from "./AuthProvider";
 import HouseholdModal from "./HouseholdModal";
 import GooseChefLogo from "./GooseChefLogo";
 
 const navItems = [
   { href: "/recipes", label: "Recipes", icon: BookOpen },
+  { href: "/planner", label: "Plan", icon: CalendarDays },
   { href: "/shopping", label: "Shopping", icon: ShoppingCart },
   { href: "/receipts", label: "Receipts", icon: Receipt },
   { href: "/cook", label: "Cook", icon: Flame },

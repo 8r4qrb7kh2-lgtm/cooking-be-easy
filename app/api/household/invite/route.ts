@@ -59,7 +59,7 @@ export async function POST() {
         return NextResponse.json({ error: "Failed to add member", detail: mErr.message }, { status: 500 });
       }
 
-      // Migrate user's existing weekly_plans and shopping_list to use household_id
+      // Migrate user's existing weekly_plans, shopping_list, and meal plan to use household_id
       await service
         .from("weekly_plans")
         .update({ household_id: householdId })
@@ -67,6 +67,11 @@ export async function POST() {
 
       await service
         .from("shopping_list")
+        .update({ household_id: householdId })
+        .eq("user_id", userId);
+
+      await service
+        .from("meal_plan_entries")
         .update({ household_id: householdId })
         .eq("user_id", userId);
     }
