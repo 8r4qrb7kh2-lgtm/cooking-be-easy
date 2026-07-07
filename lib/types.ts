@@ -23,6 +23,20 @@ export interface Ingredient {
   section: GrocerySection;
 }
 
+export interface RecipeRating {
+  recipeId: string;
+  userId: string;
+  userName: string | null;
+  rating: number; // 1-5 stars
+}
+
+export interface CookLogEntry {
+  id: string;
+  recipeId: string;
+  userId: string;
+  cookedOn: string; // YYYY-MM-DD (local calendar date the dish was made)
+}
+
 export interface Recipe {
   id: string;
   name: string;
@@ -30,7 +44,7 @@ export interface Recipe {
   sourceSteps: string[];
   steps: string[];
   notes: string;
-  rating?: number; // 1-5 stars
+  rating?: number; // cached average of recipe_ratings, kept for list/sort compatibility
   servingsYielded?: number; // actual servings this recipe produced
   dishPhotos: string[]; // base64 data URLs
   ingredientPhoto?: string; // base64 data URL of the original photo

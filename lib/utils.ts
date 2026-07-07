@@ -1,4 +1,10 @@
-import { Ingredient, ShoppingListItem, GrocerySection, GROCERY_SECTIONS } from "./types";
+import {
+  Ingredient,
+  Recipe,
+  ShoppingListItem,
+  GrocerySection,
+  GROCERY_SECTIONS,
+} from "./types";
 import { v4 as uuidv4 } from "uuid";
 
 export function fileToBase64(file: File): Promise<string> {
@@ -78,6 +84,36 @@ export function mergeIngredients(
   }
 
   return Array.from(map.values());
+}
+
+// Rebuild the shopping list from the selected recipes while preserving the
+// user's work: checkmarks on items that still exist, and any manually-added
+// items (those not tied to a recipe). Shared by the shopping page and the
+// planner's "add all to shopping list" action.
+export function buildPreservedShoppingList(
+  nextIds: string[],
+  recipesById: Record<string, Recipe>,
+  prevItems: ShoppingListItem[]
+): ShoppingListItem[] {
+  const nextRecipes = nextIds
+    .map((id) => recipesById[id])
+    .filter((recipe): recipe is Recipe => Boolean(recipe));
+  const merged = mergeIngredients(nextRecipes);
+
+  const itemKey = (name: string) => name.toLowerCase().trim();
+  const prevByKey = new Map(prevItems.map((item) => [itemKey(item.name), item]));
+  for (const item of merged) {
+    if (prevByKey.get(itemKey(item.name))?.checked) {
+      item.checked = true;
+    }
+  }
+
+  const mergedKeys = new Set(merged.map((item) => itemKey(item.name)));
+  const manualItems = prevItems.filter(
+    (item) => item.recipeIds.length === 0 && !mergedKeys.has(itemKey(item.name))
+  );
+
+  return [...merged, ...manualItems];
 }
 
 export function groupBySection(

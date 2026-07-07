@@ -54,30 +54,36 @@ export const NEVER_MADE_STATS: RecipeMealStats = {
   timesMade: 0,
 };
 
-// Entries dated on or before `asOfKey` count as "made"; future plans don't.
+export interface DatedRecipeEvent {
+  recipeId: string;
+  date: string; // YYYY-MM-DD
+}
+
+// Events dated on or before `asOfKey` count as "made"; anything later is ignored.
+// Cook logs are the source of these events (each log = the dish made that day).
 export function computeRecipeMealStats(
-  entries: MealPlanEntry[],
+  events: DatedRecipeEvent[],
   asOfKey: string
 ): Record<string, RecipeMealStats> {
   const statsByRecipeId: Record<string, RecipeMealStats> = {};
 
-  for (const entry of entries) {
-    if (entry.planDate > asOfKey) continue;
+  for (const event of events) {
+    if (event.date > asOfKey) continue;
 
-    const existing = statsByRecipeId[entry.recipeId];
+    const existing = statsByRecipeId[event.recipeId];
     if (!existing) {
-      statsByRecipeId[entry.recipeId] = {
-        lastMadeKey: entry.planDate,
-        daysSinceMade: daysBetweenKeys(entry.planDate, asOfKey),
+      statsByRecipeId[event.recipeId] = {
+        lastMadeKey: event.date,
+        daysSinceMade: daysBetweenKeys(event.date, asOfKey),
         timesMade: 1,
       };
       continue;
     }
 
     existing.timesMade += 1;
-    if (!existing.lastMadeKey || entry.planDate > existing.lastMadeKey) {
-      existing.lastMadeKey = entry.planDate;
-      existing.daysSinceMade = daysBetweenKeys(entry.planDate, asOfKey);
+    if (!existing.lastMadeKey || event.date > existing.lastMadeKey) {
+      existing.lastMadeKey = event.date;
+      existing.daysSinceMade = daysBetweenKeys(event.date, asOfKey);
     }
   }
 

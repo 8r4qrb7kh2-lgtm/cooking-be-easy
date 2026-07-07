@@ -14,6 +14,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Ingredient, Recipe } from "@/lib/types";
 import { getRecipe } from "@/lib/storage";
+import { logCookedToday } from "@/lib/cookLog";
 import { markRecipeViewed } from "@/lib/recentViews";
 import { extractTimerPresets } from "@/lib/globalTimers";
 import GlobalTimerTray, { SuggestedTimer } from "@/components/GlobalTimerTray";
@@ -29,6 +30,7 @@ import {
 } from "@/lib/recipeSteps";
 import {
   ArrowLeft,
+  Check,
   ChevronLeft,
   ChevronRight,
   Clock3,
@@ -37,6 +39,7 @@ import {
   Moon,
   RotateCcw,
   Sun,
+  UtensilsCrossed,
   X,
 } from "lucide-react";
 
@@ -198,6 +201,13 @@ export default function CookingModePage() {
   const [keepScreenAwake, setKeepScreenAwake] = useState(false);
   const [wakeLockError, setWakeLockError] = useState<string | null>(null);
 
+  // "Did you make this today?" prompt shown once on entering cooking mode. A
+  // "Yes" is the only way a cook is logged (which drives "days since last made").
+  const [showCookPrompt, setShowCookPrompt] = useState(false);
+  const [cookLogState, setCookLogState] = useState<"idle" | "logging" | "logged">(
+    "idle"
+  );
+
   useEffect(() => {
     getRecipe(id).then((r) => {
       if (!r || !r.steps || r.steps.length === 0) {
@@ -206,8 +216,22 @@ export default function CookingModePage() {
       }
       setRecipe(r);
       markRecipeViewed(r.id);
+      setShowCookPrompt(true);
     });
   }, [id, router]);
+
+  async function confirmCookedToday() {
+    if (!recipe || cookLogState === "logging") return;
+    setCookLogState("logging");
+    try {
+      await logCookedToday(recipe.id);
+      setCookLogState("logged");
+    } catch {
+      setCookLogState("idle");
+    } finally {
+      setShowCookPrompt(false);
+    }
+  }
 
   async function handleConvert(ingredient: Ingredient, targetUnit: string) {
     if (!targetUnit.trim() || !ingredient.quantity || !ingredient.unit) return;
@@ -930,6 +954,53 @@ export default function CookingModePage() {
 
   return (
     <div className="max-w-5xl mx-auto pb-32">
+      {showCookPrompt && (
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40 px-4 pb-24 sm:pb-0">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-center gap-2 text-brand-600">
+              <UtensilsCrossed size={20} />
+              <h2 className="text-base font-semibold text-gray-900">
+                Cooking this today?
+              </h2>
+            </div>
+            <p className="mt-2 text-sm text-gray-500">
+              Tap Yes to log that you made{" "}
+              <span className="font-medium text-gray-700">{recipe.name}</span> today.
+              This is what tracks when you last made it.
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowCookPrompt(false)}
+                className="flex-1 rounded-xl border border-gray-200 bg-white py-2.5 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                No, just browsing
+              </button>
+              <button
+                type="button"
+                onClick={confirmCookedToday}
+                disabled={cookLogState === "logging"}
+                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-brand-600 py-2.5 text-sm font-medium text-white hover:bg-brand-700 transition-colors disabled:opacity-60"
+              >
+                {cookLogState === "logging" && (
+                  <Loader2 size={15} className="animate-spin" />
+                )}
+                Yes, cooking it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cookLogState === "logged" && (
+        <div className="fixed inset-x-0 top-4 z-[55] flex justify-center px-4 pointer-events-none">
+          <div className="inline-flex items-center gap-1.5 rounded-full bg-gray-900/95 px-4 py-2 text-xs text-white shadow-lg">
+            <Check size={14} className="text-brand-300" />
+            Logged for today
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-3 mb-6">
         <Link
           href={`/recipes/${id}`}

@@ -18,7 +18,7 @@ import {
 } from "@/lib/storage";
 import { getRecentRecipeViews, RecentRecipeViews } from "@/lib/recentViews";
 import { RecipeSortOption, sortRecipes } from "@/lib/recipeSort";
-import { groupBySection, mergeIngredients } from "@/lib/utils";
+import { buildPreservedShoppingList, groupBySection } from "@/lib/utils";
 import PageLoadingScreen from "@/components/PageLoadingScreen";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -33,36 +33,6 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-
-// Rebuild the shopping list from the selected recipes while preserving the
-// user's work: checkmarks on items that still exist, and any manually-added
-// items (those not tied to a recipe). This lets the list auto-update on every
-// selection change without wiping checked state or hand-entered items.
-function buildPreservedShoppingList(
-  nextIds: string[],
-  recipesById: Record<string, Recipe>,
-  prevItems: ShoppingListItem[]
-): ShoppingListItem[] {
-  const nextRecipes = nextIds
-    .map((id) => recipesById[id])
-    .filter((recipe): recipe is Recipe => Boolean(recipe));
-  const merged = mergeIngredients(nextRecipes);
-
-  const itemKey = (name: string) => name.toLowerCase().trim();
-  const prevByKey = new Map(prevItems.map((item) => [itemKey(item.name), item]));
-  for (const item of merged) {
-    if (prevByKey.get(itemKey(item.name))?.checked) {
-      item.checked = true;
-    }
-  }
-
-  const mergedKeys = new Set(merged.map((item) => itemKey(item.name)));
-  const manualItems = prevItems.filter(
-    (item) => item.recipeIds.length === 0 && !mergedKeys.has(itemKey(item.name))
-  );
-
-  return [...merged, ...manualItems];
-}
 
 export default function ShoppingPage() {
   const router = useRouter();

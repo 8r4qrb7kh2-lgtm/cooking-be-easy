@@ -9,6 +9,7 @@ import { getRecipe, saveRecipe } from "@/lib/storage";
 import { markRecipeViewed } from "@/lib/recentViews";
 import IngredientEditor, { IngredientEditorMeta } from "@/components/IngredientEditor";
 import StepEditor from "@/components/StepEditor";
+import RecipeRatingPanel from "@/components/RecipeRatingPanel";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -16,7 +17,6 @@ import {
   Banknote,
   Check,
   Copy,
-  Save,
   Camera,
   X,
   ChevronDown,
@@ -27,7 +27,6 @@ import {
   Loader2,
   ExternalLink,
   Share2,
-  Star,
   Flame,
   ShoppingCart,
   RefreshCw,
@@ -62,7 +61,9 @@ export default function RecipeDetailPage() {
   const [name, setName] = useState("");
   const [showIngredients, setShowIngredients] = useState(true);
   const [showSteps, setShowSteps] = useState(true);
-  const [dirty, setDirty] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [pricingStale, setPricingStale] = useState(false);
+  const loadedRecipeIdRef = useRef<string | null>(null);
   const [myNetDiaryCopied, setMyNetDiaryCopied] = useState(false);
   const [sharingToMyNetDiary, setSharingToMyNetDiary] = useState(false);
   const [priceEstimate, setPriceEstimate] = useState<RecipePriceEstimate | null>(null);
@@ -83,6 +84,28 @@ export default function RecipeDetailPage() {
     });
   }, [id, router]);
 
+  // Auto-save: persist edits shortly after they stop — no manual Save button.
+  // The first render for a given recipe is its initial load, not an edit, so we
+  // skip saving then to avoid a redundant write on open.
+  useEffect(() => {
+    if (!recipe) return;
+    if (loadedRecipeIdRef.current !== recipe.id) {
+      loadedRecipeIdRef.current = recipe.id;
+      return;
+    }
+
+    setSaveStatus("saving");
+    const timer = setTimeout(async () => {
+      try {
+        await saveRecipe({ ...recipe, name, updatedAt: new Date().toISOString() });
+        setSaveStatus("saved");
+      } catch {
+        setSaveStatus("idle");
+      }
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [recipe, name]);
+
   const loadOrComputePricing = useCallback(
     async (targetRecipe: Recipe, mode: "auto" | "manual") => {
       const targetId = targetRecipe.id;
@@ -96,6 +119,7 @@ export default function RecipeDetailPage() {
           if (!isStale()) {
             setPriceEstimate(cached);
             setPricingError("");
+            setPricingStale(false);
           }
           return;
         }
@@ -130,6 +154,7 @@ export default function RecipeDetailPage() {
         if (isStale()) return;
         setPriceEstimate(data as RecipePriceEstimate);
         setPricingError("");
+        setPricingStale(false);
 
         if (typeof window !== "undefined") {
           window.localStorage.setItem(cacheKey, JSON.stringify(data));
@@ -174,55 +199,43 @@ export default function RecipeDetailPage() {
   function updateIngredients(ingredients: Recipe["ingredients"]) {
     if (!recipe) return;
     setRecipe({ ...recipe, ingredients });
-    setDirty(true);
+    setPricingStale(true);
   }
 
   function updateSteps(steps: Recipe["steps"]) {
     if (!recipe) return;
     setRecipe({ ...recipe, steps });
-    setDirty(true);
   }
 
-  function updateRecipeProfile(updates: Pick<Recipe, "rating" | "servingsYielded">) {
+  function updateServings(servingsYielded: number | undefined) {
     if (!recipe) return;
-    setRecipe({ ...recipe, ...updates });
-    setDirty(true);
+    setRecipe({ ...recipe, servingsYielded });
   }
 
   function updateRecipeNotes(notes: string) {
     if (!recipe) return;
     setRecipe({ ...recipe, notes });
-    setDirty(true);
   }
 
-  async function handleSave() {
-    if (!recipe) return;
-    const updated = { ...recipe, name, updatedAt: new Date().toISOString() };
-    await saveRecipe(updated);
-    setRecipe(updated);
-    setDirty(false);
+  // The rating panel owns per-user ratings; it reports the new cached average so
+  // recipe.rating (used by list/shopping sorts) stays in sync and auto-saves.
+  function handleAverageChange(average: number | null) {
+    setRecipe((prev) =>
+      prev ? { ...prev, rating: average === null ? undefined : average } : prev
+    );
   }
 
-  async function addDishPhoto(base64: string) {
+  function addDishPhoto(base64: string) {
     if (!recipe) return;
-    const updated = {
-      ...recipe,
-      dishPhotos: [...recipe.dishPhotos, base64],
-      updatedAt: new Date().toISOString(),
-    };
-    await saveRecipe(updated);
-    setRecipe(updated);
+    setRecipe({ ...recipe, dishPhotos: [...recipe.dishPhotos, base64] });
   }
 
-  async function removeDishPhoto(index: number) {
+  function removeDishPhoto(index: number) {
     if (!recipe) return;
-    const updated = {
+    setRecipe({
       ...recipe,
       dishPhotos: recipe.dishPhotos.filter((_, i) => i !== index),
-      updatedAt: new Date().toISOString(),
-    };
-    await saveRecipe(updated);
-    setRecipe(updated);
+    });
   }
 
   const ingredientPricingMetaById = useMemo<Record<string, IngredientEditorMeta>>(() => {
@@ -280,7 +293,7 @@ export default function RecipeDetailPage() {
         return acc;
       }
 
-      if (dirty) {
+      if (pricingStale) {
         acc[ingredient.id] = {
           label: "Estimate may be stale",
           detail: "Tap Refresh to update this ingredient price.",
@@ -289,7 +302,7 @@ export default function RecipeDetailPage() {
 
       return acc;
     }, {});
-  }, [dirty, priceEstimate, pricingLoading, recipe]);
+  }, [pricingStale, priceEstimate, pricingLoading, recipe]);
 
   if (!recipe) return null;
 
@@ -346,10 +359,7 @@ export default function RecipeDetailPage() {
               autoFocus
               className="w-full text-xl font-bold text-gray-900 border-b-2 border-brand-500 focus:outline-none bg-transparent"
               value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                setDirty(true);
-              }}
+              onChange={(e) => setName(e.target.value)}
               onBlur={() => setEditingName(false)}
               onKeyDown={(e) => e.key === "Enter" && setEditingName(false)}
             />
@@ -395,14 +405,20 @@ export default function RecipeDetailPage() {
             </Link>
           </div>
         </div>
-        {dirty && (
-          <button
-            onClick={handleSave}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 text-white text-sm rounded-lg hover:bg-brand-700 transition-colors shrink-0"
-          >
-            <Save size={15} />
-            Save
-          </button>
+        {saveStatus !== "idle" && (
+          <span className="flex items-center gap-1.5 text-xs text-gray-400 shrink-0 mt-1">
+            {saveStatus === "saving" ? (
+              <>
+                <Loader2 size={13} className="animate-spin" />
+                Saving
+              </>
+            ) : (
+              <>
+                <Check size={13} className="text-brand-600" />
+                Saved
+              </>
+            )}
+          </span>
         )}
       </div>
 
@@ -499,7 +515,7 @@ export default function RecipeDetailPage() {
           </p>
         </div>
 
-        {dirty && (
+        {pricingStale && (
           <p className="mt-3 text-xs text-amber-700">
             Ingredient edits aren&apos;t reflected in the price until you tap Refresh.
           </p>
@@ -517,35 +533,7 @@ export default function RecipeDetailPage() {
       <div className="mb-6 bg-white border border-gray-200 rounded-xl p-4 space-y-4">
         <h2 className="font-semibold text-gray-900">Recipe Profile</h2>
 
-        <div>
-          <p className="text-sm font-medium text-gray-700 mb-2">Rating</p>
-          <div className="flex items-center gap-1">
-            {[1, 2, 3, 4, 5].map((value) => {
-              const filled = value <= (recipe.rating ?? 0);
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() =>
-                    updateRecipeProfile({
-                      rating: recipe.rating === value ? undefined : value,
-                      servingsYielded: recipe.servingsYielded,
-                    })
-                  }
-                  className={`p-1 rounded-md transition-colors ${
-                    filled
-                      ? "text-amber-500 hover:text-amber-600"
-                      : "text-gray-300 hover:text-amber-400"
-                  }`}
-                  aria-label={`Set rating to ${value} star${value === 1 ? "" : "s"}`}
-                  title={`Set rating to ${value} star${value === 1 ? "" : "s"}`}
-                >
-                  <Star size={22} fill={filled ? "currentColor" : "none"} />
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <RecipeRatingPanel recipeId={recipe.id} onAverageChange={handleAverageChange} />
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
@@ -559,20 +547,14 @@ export default function RecipeDetailPage() {
             onChange={(e) => {
               const value = e.target.value;
               if (value === "") {
-                updateRecipeProfile({
-                  rating: recipe.rating,
-                  servingsYielded: undefined,
-                });
+                updateServings(undefined);
                 return;
               }
 
               const parsed = Number(value);
               if (!Number.isFinite(parsed) || parsed < 0) return;
 
-              updateRecipeProfile({
-                rating: recipe.rating,
-                servingsYielded: parsed,
-              });
+              updateServings(parsed);
             }}
             placeholder="e.g. 4"
             className="w-full max-w-[12rem] px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
@@ -666,14 +648,6 @@ export default function RecipeDetailPage() {
                 updateIngredients(ings);
               }}
             />
-            {dirty && (
-              <button
-                onClick={handleSave}
-                className="mt-4 w-full py-2.5 bg-brand-600 text-white rounded-xl font-medium hover:bg-brand-700 transition-colors"
-              >
-                Save changes
-              </button>
-            )}
           </>
         )}
       </div>
@@ -738,15 +712,6 @@ export default function RecipeDetailPage() {
                 emptyLabel="No cooking steps saved yet. Add the first one below."
               />
             </div>
-
-            {dirty && (
-              <button
-                onClick={handleSave}
-                className="lg:col-span-2 mt-1 w-full rounded-xl bg-brand-600 py-2.5 font-medium text-white transition-colors hover:bg-brand-700"
-              >
-                Save changes
-              </button>
-            )}
           </div>
         )}
       </div>

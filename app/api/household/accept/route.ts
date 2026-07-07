@@ -87,5 +87,15 @@ export async function POST(request: NextRequest) {
     .update({ household_id: invite.household_id })
     .eq("user_id", userId);
 
+  await service
+    .from("recipe_ratings")
+    .update({ household_id: invite.household_id })
+    .eq("user_id", userId);
+
+  await service
+    .from("recipe_cook_logs")
+    .update({ household_id: invite.household_id })
+    .eq("user_id", userId);
+
   return NextResponse.json({ success: true });
 }

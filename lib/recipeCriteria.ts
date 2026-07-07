@@ -10,12 +10,22 @@ export type CriterionId =
   | "ingredientCount"
   | "daysInLibrary";
 
+// Everything a criterion might read, precomputed per recipe. `rating` is already
+// resolved for whichever rater the plot is using (average or a specific person).
+export interface RecipeMetrics {
+  daysSinceMade: number | null;
+  timesMade: number;
+  rating: number | null;
+  ingredientCount: number;
+  daysInLibrary: number;
+}
+
 export interface RecipeCriterion {
   id: CriterionId;
   label: string;
   unit: string;
   // null = the recipe has no value for this criterion (never made / unrated)
-  getValue: (recipe: Recipe, stats: RecipeMealStats) => number | null;
+  getValue: (metrics: RecipeMetrics) => number | null;
   // Which end of the scale a null value conceptually sits at: never-made is
   // beyond the oldest "days since made", unrated is below every rating.
   nullSide: "low" | "high" | null;
@@ -26,10 +36,25 @@ export interface RecipeCriterion {
   formatTick: (value: number) => string;
 }
 
-function daysInLibrary(recipe: Recipe): number {
-  const created = Date.parse(recipe.createdAt);
+function daysInLibrary(createdAt: string, nowMs: number): number {
+  const created = Date.parse(createdAt);
   if (!Number.isFinite(created)) return 0;
-  return Math.max(0, Math.floor((Date.now() - created) / DAY_MS));
+  return Math.max(0, Math.floor((nowMs - created) / DAY_MS));
+}
+
+export function buildRecipeMetrics(
+  recipe: Recipe,
+  stats: RecipeMealStats,
+  resolvedRating: number | null,
+  nowMs: number
+): RecipeMetrics {
+  return {
+    daysSinceMade: stats.daysSinceMade,
+    timesMade: stats.timesMade,
+    rating: resolvedRating,
+    ingredientCount: recipe.ingredients.length,
+    daysInLibrary: daysInLibrary(recipe.createdAt, nowMs),
+  };
 }
 
 export const RECIPE_CRITERIA: RecipeCriterion[] = [
@@ -37,7 +62,7 @@ export const RECIPE_CRITERIA: RecipeCriterion[] = [
     id: "daysSinceMade",
     label: "Days since last made",
     unit: "days",
-    getValue: (_recipe, stats) => stats.daysSinceMade,
+    getValue: (metrics) => metrics.daysSinceMade,
     nullSide: "high",
     nullLabel: "Never",
     minDomainMax: 7,
@@ -47,7 +72,7 @@ export const RECIPE_CRITERIA: RecipeCriterion[] = [
     id: "rating",
     label: "Rating",
     unit: "stars",
-    getValue: (recipe) => recipe.rating ?? null,
+    getValue: (metrics) => metrics.rating,
     nullSide: "low",
     nullLabel: "Unrated",
     fixedDomain: [1, 5],
@@ -57,7 +82,7 @@ export const RECIPE_CRITERIA: RecipeCriterion[] = [
     id: "timesMade",
     label: "Times made",
     unit: "times",
-    getValue: (_recipe, stats) => stats.timesMade,
+    getValue: (metrics) => metrics.timesMade,
     nullSide: null,
     nullLabel: null,
     minDomainMax: 4,
@@ -67,7 +92,7 @@ export const RECIPE_CRITERIA: RecipeCriterion[] = [
     id: "ingredientCount",
     label: "Ingredient count",
     unit: "ingredients",
-    getValue: (recipe) => recipe.ingredients.length,
+    getValue: (metrics) => metrics.ingredientCount,
     nullSide: null,
     nullLabel: null,
     minDomainMax: 5,
@@ -77,7 +102,7 @@ export const RECIPE_CRITERIA: RecipeCriterion[] = [
     id: "daysInLibrary",
     label: "Days in library",
     unit: "days",
-    getValue: (recipe) => daysInLibrary(recipe),
+    getValue: (metrics) => metrics.daysInLibrary,
     nullSide: null,
     nullLabel: null,
     minDomainMax: 7,
@@ -105,14 +130,13 @@ export interface PoolFilter {
 // A null criterion value compares as if it sat past the criterion's null end:
 // "days since made ≥ 3" keeps never-made recipes, "rating ≥ 4" drops unrated ones.
 export function recipePassesFilter(
-  recipe: Recipe,
-  stats: RecipeMealStats,
+  metrics: RecipeMetrics,
   filter: PoolFilter
 ): boolean {
   const criterion = CRITERIA_BY_ID[filter.criterionId];
   if (!criterion) return true;
 
-  const raw = criterion.getValue(recipe, stats);
+  const raw = criterion.getValue(metrics);
   const value =
     raw === null ? (criterion.nullSide === "high" ? Infinity : -Infinity) : raw;
 

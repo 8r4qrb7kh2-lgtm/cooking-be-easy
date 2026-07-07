@@ -74,6 +74,16 @@ export async function POST() {
         .from("meal_plan_entries")
         .update({ household_id: householdId })
         .eq("user_id", userId);
+
+      await service
+        .from("recipe_ratings")
+        .update({ household_id: householdId })
+        .eq("user_id", userId);
+
+      await service
+        .from("recipe_cook_logs")
+        .update({ household_id: householdId })
+        .eq("user_id", userId);
     }
 
     // Create invite

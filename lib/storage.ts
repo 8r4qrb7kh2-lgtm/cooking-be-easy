@@ -226,6 +226,18 @@ export async function deleteRecipe(id: string): Promise<void> {
     .eq("recipe_id", id);
   if (mealPlanError) throw mealPlanError;
 
+  const { error: ratingsError } = await supabase
+    .from("recipe_ratings")
+    .delete()
+    .eq("recipe_id", id);
+  if (ratingsError) throw ratingsError;
+
+  const { error: cookLogsError } = await supabase
+    .from("recipe_cook_logs")
+    .delete()
+    .eq("recipe_id", id);
+  if (cookLogsError) throw cookLogsError;
+
   const { error } = await supabase.from("recipes").delete().eq("id", id);
   if (error) throw error;
 }

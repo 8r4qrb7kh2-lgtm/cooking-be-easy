@@ -2,8 +2,25 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { MealPlanEntry, MealSlot, MEAL_SLOTS, Recipe } from "@/lib/types";
-import { getRecipes } from "@/lib/storage";
+import {
+  CookLogEntry,
+  MealPlanEntry,
+  MealSlot,
+  MEAL_SLOTS,
+  Recipe,
+  RecipeRating,
+} from "@/lib/types";
+import {
+  getRecipes,
+  getShoppingList,
+  getWeeklyPlanIds,
+  saveShoppingList,
+  setWeeklyPlanIds,
+} from "@/lib/storage";
+import { getCookLogs } from "@/lib/cookLog";
+import { averageRating, getDisplayName, getRecipeRatings } from "@/lib/ratings";
+import { buildPreservedShoppingList } from "@/lib/utils";
+import { useAuth } from "@/components/AuthProvider";
 import {
   addDaysToKey,
   addMealPlanEntry,
@@ -18,6 +35,7 @@ import {
   todayKey,
 } from "@/lib/mealPlan";
 import {
+  buildRecipeMetrics,
   CRITERIA_BY_ID,
   CriterionId,
   FilterOperator,
@@ -25,6 +43,7 @@ import {
   PoolFilter,
   RECIPE_CRITERIA,
   RecipeCriterion,
+  RecipeMetrics,
   recipePassesFilter,
 } from "@/lib/recipeCriteria";
 import PageLoadingScreen from "@/components/PageLoadingScreen";
@@ -33,16 +52,20 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ImageIcon,
   ListChecks,
   Moon,
   Plus,
   Search,
+  ShoppingCart,
   SlidersHorizontal,
-  Star,
   Sun,
   UtensilsCrossed,
   X,
 } from "lucide-react";
+
+// The plot's rating axis/filter can use the household average or one person's ratings.
+const AVERAGE_RATING_SOURCE = "average";
 
 const SLOT_LABELS: Record<MealSlot, string> = { lunch: "Lunch", dinner: "Dinner" };
 
@@ -56,6 +79,7 @@ interface StoredPoolSettings {
   manualIds: string[];
   xAxisId: CriterionId;
   yAxisId: CriterionId;
+  ratingSource: string; // "average" or a user id
 }
 
 // Sensible starting point when a criterion is first added as a filter
@@ -207,6 +231,9 @@ function loadStoredPoolSettings(): Partial<StoredPoolSettings> | null {
     }
     if (isCriterionId(candidate.xAxisId)) settings.xAxisId = candidate.xAxisId;
     if (isCriterionId(candidate.yAxisId)) settings.yAxisId = candidate.yAxisId;
+    if (typeof candidate.ratingSource === "string") {
+      settings.ratingSource = candidate.ratingSource;
+    }
     if (Array.isArray(candidate.manualIds)) {
       settings.manualIds = candidate.manualIds.filter(
         (id): id is string => typeof id === "string"
@@ -237,11 +264,16 @@ function loadStoredPoolSettings(): Partial<StoredPoolSettings> | null {
 }
 
 export default function PlannerPage() {
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [entries, setEntries] = useState<MealPlanEntry[]>([]);
+  const [cookLogs, setCookLogs] = useState<CookLogEntry[]>([]);
+  const [ratings, setRatings] = useState<RecipeRating[]>([]);
   const [planLoadFailed, setPlanLoadFailed] = useState(false);
   const [weekStartKey, setWeekStartKey] = useState(() => startOfWeekKey(todayKey()));
+  const [addingToShopping, setAddingToShopping] = useState(false);
+  const [shoppingMessage, setShoppingMessage] = useState<string | null>(null);
 
   // Lazy-init from localStorage: the first render is just the loading screen
   // on server and client alike, so reading client-only state here can't cause
@@ -257,6 +289,9 @@ export default function PlannerPage() {
     storedSettings?.xAxisId ?? "daysSinceMade"
   );
   const [yAxisId, setYAxisId] = useState<CriterionId>(storedSettings?.yAxisId ?? "rating");
+  const [ratingSource, setRatingSource] = useState<string>(
+    storedSettings?.ratingSource ?? AVERAGE_RATING_SOURCE
+  );
   const [manualPickerOpen, setManualPickerOpen] = useState(false);
   const [manualQuery, setManualQuery] = useState("");
   const manualPickerRef = useRef<HTMLDivElement | null>(null);
@@ -272,14 +307,19 @@ export default function PlannerPage() {
     let mounted = true;
 
     async function load() {
-      const [recipesResult, entriesResult] = await Promise.allSettled([
-        getRecipes(),
-        getMealPlanEntries(),
-      ]);
+      const [recipesResult, entriesResult, cookLogsResult, ratingsResult] =
+        await Promise.allSettled([
+          getRecipes(),
+          getMealPlanEntries(),
+          getCookLogs(),
+          getRecipeRatings(),
+        ]);
 
       if (!mounted) return;
 
       if (recipesResult.status === "fulfilled") setRecipes(recipesResult.value);
+      if (cookLogsResult.status === "fulfilled") setCookLogs(cookLogsResult.value);
+      if (ratingsResult.status === "fulfilled") setRatings(ratingsResult.value);
       if (entriesResult.status === "fulfilled") {
         setEntries(entriesResult.value);
       } else {
@@ -304,9 +344,10 @@ export default function PlannerPage() {
       manualIds: Array.from(manualIds),
       xAxisId,
       yAxisId,
+      ratingSource,
     };
     window.localStorage.setItem(POOL_SETTINGS_KEY, JSON.stringify(settings));
-  }, [poolMode, filters, manualIds, xAxisId, yAxisId]);
+  }, [poolMode, filters, manualIds, xAxisId, yAxisId, ratingSource]);
 
   // Close the manual picker on outside clicks
   useEffect(() => {
@@ -342,10 +383,81 @@ export default function PlannerPage() {
     [recipes]
   );
 
+  // "Made" history now comes solely from cook logs (logged from cooking mode).
   const statsByRecipeId = useMemo(
-    () => computeRecipeMealStats(entries, today),
-    [entries, today]
+    () =>
+      computeRecipeMealStats(
+        cookLogs.map((log) => ({ recipeId: log.recipeId, date: log.cookedOn })),
+        today
+      ),
+    [cookLogs, today]
   );
+
+  const ratingsByRecipeId = useMemo(() => {
+    const map = new Map<string, RecipeRating[]>();
+    for (const rating of ratings) {
+      const list = map.get(rating.recipeId);
+      if (list) {
+        list.push(rating);
+      } else {
+        map.set(rating.recipeId, [rating]);
+      }
+    }
+    return map;
+  }, [ratings]);
+
+  // Options for the plot's rating source: the household average, then each
+  // distinct rater (current user always available, even before they've rated).
+  const raterOptions = useMemo(() => {
+    const options: Array<{ id: string; label: string }> = [
+      { id: AVERAGE_RATING_SOURCE, label: "Average" },
+    ];
+    const myId = user?.id ?? null;
+    const seen = new Set<string>();
+
+    if (myId) {
+      const myName = getDisplayName(user);
+      options.push({ id: myId, label: myName ? `${myName} (you)` : "You" });
+      seen.add(myId);
+    }
+
+    const others = new Map<string, string>();
+    for (const rating of ratings) {
+      if (seen.has(rating.userId) || others.has(rating.userId)) continue;
+      others.set(rating.userId, rating.userName ?? "Household member");
+    }
+    Array.from(others.entries())
+      .sort((a, b) => a[1].localeCompare(b[1], undefined, { sensitivity: "base" }))
+      .forEach(([id, label]) => options.push({ id, label }));
+
+    return options;
+  }, [ratings, user]);
+
+  const resolvedRatingFor = useMemo(() => {
+    return (recipeId: string): number | null => {
+      const recipeRatings = ratingsByRecipeId.get(recipeId) ?? [];
+      if (ratingSource === AVERAGE_RATING_SOURCE) {
+        return averageRating(recipeRatings);
+      }
+      return (
+        recipeRatings.find((rating) => rating.userId === ratingSource)?.rating ?? null
+      );
+    };
+  }, [ratingsByRecipeId, ratingSource]);
+
+  const nowMs = useMemo(() => Date.now(), []);
+
+  const metricsByRecipeId = useMemo(() => {
+    const map = new Map<string, RecipeMetrics>();
+    for (const recipe of recipes) {
+      const stats = statsByRecipeId[recipe.id] ?? NEVER_MADE_STATS;
+      map.set(
+        recipe.id,
+        buildRecipeMetrics(recipe, stats, resolvedRatingFor(recipe.id), nowMs)
+      );
+    }
+    return map;
+  }, [recipes, statsByRecipeId, resolvedRatingFor, nowMs]);
 
   const weekDayKeys = useMemo(
     () => Array.from({ length: 7 }, (_, i) => addDaysToKey(weekStartKey, i)),
@@ -379,12 +491,12 @@ export default function PlannerPage() {
     if (poolMode === "manual") {
       return recipes.filter((recipe) => manualIds.has(recipe.id));
     }
-    return recipes.filter((recipe) =>
-      filters.every((filter) =>
-        recipePassesFilter(recipe, statsByRecipeId[recipe.id] ?? NEVER_MADE_STATS, filter)
-      )
-    );
-  }, [recipes, poolMode, manualIds, filters, statsByRecipeId]);
+    return recipes.filter((recipe) => {
+      const metrics = metricsByRecipeId.get(recipe.id);
+      if (!metrics) return false;
+      return filters.every((filter) => recipePassesFilter(metrics, filter));
+    });
+  }, [recipes, poolMode, manualIds, filters, metricsByRecipeId]);
 
   const plotLayout = useMemo(() => {
     const xCriterion = CRITERIA_BY_ID[xAxisId];
@@ -394,10 +506,14 @@ export default function PlannerPage() {
       a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
     );
     const xValues = sorted.map((recipe) =>
-      xCriterion.getValue(recipe, statsByRecipeId[recipe.id] ?? NEVER_MADE_STATS)
+      metricsByRecipeId.has(recipe.id)
+        ? xCriterion.getValue(metricsByRecipeId.get(recipe.id)!)
+        : null
     );
     const yValues = sorted.map((recipe) =>
-      yCriterion.getValue(recipe, statsByRecipeId[recipe.id] ?? NEVER_MADE_STATS)
+      metricsByRecipeId.has(recipe.id)
+        ? yCriterion.getValue(metricsByRecipeId.get(recipe.id)!)
+        : null
     );
 
     const xAxis = buildAxisLayout(xCriterion, xValues);
@@ -419,7 +535,7 @@ export default function PlannerPage() {
     });
 
     return { xAxis, yAxis, points };
-  }, [poolRecipes, statsByRecipeId, xAxisId, yAxisId]);
+  }, [poolRecipes, metricsByRecipeId, xAxisId, yAxisId]);
 
   const manualPickerRecipes = useMemo(() => {
     const query = manualQuery.trim().toLowerCase();
@@ -468,6 +584,34 @@ export default function PlannerPage() {
     setEntries((prev) => prev.filter((entry) => entry.id !== id));
     setPendingPlace((prev) => (prev?.entryId === id ? null : prev));
     void removeMealPlanEntry(id);
+  }
+
+  // Adds every recipe currently shown in the pool to the shopping list,
+  // merging with (not replacing) whatever is already selected there.
+  async function addPoolToShopping() {
+    if (addingToShopping || poolRecipes.length === 0) return;
+    setAddingToShopping(true);
+    setShoppingMessage(null);
+    try {
+      const [existingList, existingIds] = await Promise.all([
+        getShoppingList(),
+        getWeeklyPlanIds(),
+      ]);
+      const poolIds = poolRecipes.map((recipe) => recipe.id);
+      const mergedIds = Array.from(new Set([...existingIds, ...poolIds]));
+      const addedCount = mergedIds.length - existingIds.length;
+      const nextList = buildPreservedShoppingList(mergedIds, recipesById, existingList);
+      await Promise.all([setWeeklyPlanIds(mergedIds), saveShoppingList(nextList)]);
+      setShoppingMessage(
+        addedCount === 0
+          ? "Those recipes are already on your shopping list."
+          : `Added ${addedCount} recipe${addedCount === 1 ? "" : "s"} to your shopping list.`
+      );
+    } catch {
+      setShoppingMessage("Couldn't update the shopping list. Please try again.");
+    } finally {
+      setAddingToShopping(false);
+    }
   }
 
   // --- Chip drag / tap-to-place ---
@@ -601,17 +745,43 @@ export default function PlannerPage() {
   const draggedRecipe = dragView?.active ? recipesById[dragView.recipeId] : undefined;
   const pendingRecipe = pendingPlace ? recipesById[pendingPlace.recipeId] : undefined;
   const { xAxis, yAxis, points } = plotLayout;
+  const ratingInUse =
+    xAxisId === "rating" ||
+    yAxisId === "rating" ||
+    filters.some((filter) => filter.criterionId === "rating");
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Meal Planner</h1>
-        <p className="text-sm text-gray-500 mt-0.5">
-          {weekMealCount === 0
-            ? "Drag recipes from the pool into lunch and dinner slots."
-            : `${weekMealCount} meal${weekMealCount === 1 ? "" : "s"} planned this week`}
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Meal Planner</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {weekMealCount === 0
+              ? "Drag recipes from the pool into lunch and dinner slots."
+              : `${weekMealCount} meal${weekMealCount === 1 ? "" : "s"} planned this week`}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={addPoolToShopping}
+          disabled={addingToShopping || poolRecipes.length === 0}
+          title="Add every recipe currently shown in the pool to your shopping list"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:opacity-50"
+        >
+          <ShoppingCart size={15} />
+          <span className="hidden sm:inline">Add all to shopping</span>
+          <span className="sm:hidden">Add all</span>
+        </button>
       </div>
+
+      {shoppingMessage && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-2.5 text-sm text-brand-800">
+          <span>{shoppingMessage}</span>
+          <a href="/shopping" className="font-medium text-brand-700 hover:underline shrink-0">
+            View list
+          </a>
+        </div>
+      )}
 
       {planLoadFailed && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -960,12 +1130,22 @@ export default function PlannerPage() {
                             >
                               {checked && <Check size={11} className="text-white" />}
                             </span>
+                            {recipe.dishPhotos[0] ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={recipe.dishPhotos[0]}
+                                alt=""
+                                className="h-7 w-7 shrink-0 rounded-md object-cover"
+                              />
+                            ) : (
+                              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gray-100">
+                                <ImageIcon size={13} className="text-gray-300" />
+                              </span>
+                            )}
                             <span className="flex-1 min-w-0 truncate text-sm text-gray-800">
                               {recipe.name}
                             </span>
-                            <span className="flex shrink-0 items-center gap-1 text-[11px] text-gray-400">
-                              <Star size={10} className="text-amber-400 fill-current" />
-                              {recipe.rating ?? "–"} ·{" "}
+                            <span className="shrink-0 text-[11px] text-gray-400">
                               {formatDaysSinceMadeShort(stats.daysSinceMade)}
                             </span>
                           </button>
@@ -1010,11 +1190,29 @@ export default function PlannerPage() {
           </label>
         </div>
 
+        {ratingInUse && raterOptions.length > 1 && (
+          <label className="flex items-center gap-2 text-xs text-gray-500">
+            <span className="shrink-0 font-medium">Rating uses</span>
+            <select
+              value={ratingSource}
+              onChange={(event) => setRatingSource(event.target.value)}
+              className="h-9 flex-1 rounded-lg border border-gray-300 bg-white px-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              aria-label="Which rating the plot uses"
+            >
+              {raterOptions.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
         {/* The plot */}
         <div>
           <div className="flex items-stretch gap-1.5">
             {/* Y-axis tick labels */}
-            <div className="relative w-9 shrink-0 h-[320px] sm:h-[380px]">
+            <div className="relative w-9 shrink-0 h-[460px] sm:h-[620px]">
               {yAxis.ticks.map((tick) => (
                 <span
                   key={`y-${tick.fraction}-${tick.label}`}
@@ -1035,7 +1233,7 @@ export default function PlannerPage() {
             </div>
 
             {/* Plot area */}
-            <div className="relative flex-1 h-[320px] sm:h-[380px] rounded-lg border border-gray-200 bg-gray-50/60 overflow-hidden">
+            <div className="relative flex-1 h-[460px] sm:h-[620px] rounded-lg border border-gray-200 bg-gray-50/60 overflow-hidden">
               {/* Gridlines */}
               {xAxis.ticks.map((tick) => (
                 <div
@@ -1085,9 +1283,8 @@ export default function PlannerPage() {
                 </div>
               )}
 
-              {/* Recipe chips */}
+              {/* Recipe chips — name + thumbnail only */}
               {points.map(({ recipe, xPct, topPct }) => {
-                const stats = statsFor(recipe.id);
                 // Center chips on their point, but anchor ones near the plot
                 // edges inward so overflow-hidden doesn't clip their labels
                 const anchorX =
@@ -1100,6 +1297,7 @@ export default function PlannerPage() {
                   dragView?.active &&
                   dragView.entryId === null &&
                   dragView.recipeId === recipe.id;
+                const thumbnail = recipe.dishPhotos[0];
 
                 return (
                   <button
@@ -1114,22 +1312,27 @@ export default function PlannerPage() {
                     }
                     onPointerCancel={handleChipPointerCancel}
                     onContextMenu={(event) => event.preventDefault()}
-                    className={`absolute flex max-w-[150px] ${anchorX} -translate-y-1/2 items-center gap-1 whitespace-nowrap rounded-full border bg-white px-2 py-1 text-[11px] leading-none shadow-sm cursor-grab touch-none select-none transition-shadow hover:shadow-md hover:z-20 ${
+                    className={`absolute flex max-w-[168px] ${anchorX} -translate-y-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border bg-white py-1 pl-1 pr-2.5 text-xs leading-none shadow-sm cursor-grab touch-none select-none transition-shadow hover:shadow-md hover:z-20 ${
                       isSelected
                         ? "border-brand-500 ring-2 ring-brand-300 z-20"
                         : "border-gray-200"
                     } ${isBeingDragged ? "opacity-40" : ""}`}
                     style={{ left: `${xPct}%`, top: `${topPct}%` }}
                   >
-                    <span className="max-w-[84px] truncate font-medium text-gray-800">
+                    {thumbnail ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={thumbnail}
+                        alt=""
+                        className="h-6 w-6 shrink-0 rounded-full object-cover"
+                      />
+                    ) : (
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gray-100">
+                        <ImageIcon size={12} className="text-gray-300" />
+                      </span>
+                    )}
+                    <span className="max-w-[120px] truncate font-medium text-gray-800">
                       {recipe.name}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-0.5 text-amber-500">
-                      <Star size={9} className="fill-current" />
-                      {recipe.rating ?? "–"}
-                    </span>
-                    <span className="shrink-0 text-gray-400">
-                      {formatDaysSinceMadeShort(stats.daysSinceMade)}
                     </span>
                   </button>
                 );
