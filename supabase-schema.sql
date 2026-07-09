@@ -78,6 +78,18 @@ create table recipe_cook_logs (
 );
 alter table recipe_cook_logs enable row level security;
 
+-- Rating prompts: which post-cook "how was it?" prompts a user has handled
+-- (rated or dismissed), so each dish is asked about at most once per cook.
+-- Per-user (personal, not household) so it syncs across the user's devices.
+create table recipe_rating_prompts (
+  user_id uuid references auth.users(id) on delete cascade not null,
+  recipe_id text not null,
+  cooked_on date not null,
+  handled_at timestamptz not null default now(),
+  primary key (user_id, recipe_id, cooked_on)
+);
+alter table recipe_rating_prompts enable row level security;
+
 -- Meal planner: one recipe planned into one meal slot (lunch/dinner) on one date
 create table meal_plan_entries (
   id uuid primary key default gen_random_uuid(),
@@ -182,6 +194,10 @@ create policy "Users manage own or household cook logs" on recipe_cook_logs for 
     auth.uid() = user_id
     OR household_id IN (select household_id from household_members where user_id = auth.uid())
   );
+
+-- Rating prompts: personal, own rows only
+create policy "Users manage own rating prompts" on recipe_rating_prompts for all
+  using (auth.uid() = user_id);
 
 -- Meal plan entries: own or same household
 create policy "Users manage own or household meal plan entries" on meal_plan_entries for all

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Star, X } from "lucide-react";
 import { useAuth } from "./AuthProvider";
 import StarRow from "./StarRow";
@@ -13,8 +13,10 @@ import {
 } from "@/lib/ratings";
 import { daysBetweenKeys, todayKey } from "@/lib/mealPlan";
 import {
+  getHandledRatingPrompts,
   markRecipeRatingHandled,
-  wasRatingPromptHandled,
+  ratingPromptKey,
+  ratingPromptKeysForToday,
 } from "@/lib/ratingPrompts";
 
 interface RatingCandidate {
@@ -40,6 +42,11 @@ export default function RatingPrompt() {
   } | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Prompts handled this session, as ratingPromptKey() strings. Seeded from the
+  // DB on each refresh and added to the instant a user rates/dismisses, so an
+  // in-flight write can never let a just-answered dish reappear.
+  const handledRef = useRef<Set<string>>(new Set());
+
   const current = queue[0] ?? null;
 
   // Gather the dishes this user cooked 1–2 days ago that they haven't been
@@ -53,12 +60,17 @@ export default function RatingPrompt() {
       return;
     }
     const uid = userId;
+    handledRef.current = new Set();
     let active = true;
 
     async function refresh() {
       try {
-        const logs = await getCookLogs();
+        const [logs, handled] = await Promise.all([
+          getCookLogs(),
+          getHandledRatingPrompts(),
+        ]);
         if (!active) return;
+        handled.forEach((key) => handledRef.current.add(key));
         const today = todayKey();
         const seen = new Set<string>();
         const candidates: RatingCandidate[] = [];
@@ -68,14 +80,15 @@ export default function RatingPrompt() {
         for (const log of mine) {
           const daysAgo = daysBetweenKeys(log.cookedOn, today);
           if (daysAgo !== 1 && daysAgo !== 2) continue;
-          if (wasRatingPromptHandled(uid, log.recipeId, log.cookedOn)) continue;
+          if (handledRef.current.has(ratingPromptKey(log.recipeId, log.cookedOn)))
+            continue;
           if (seen.has(log.recipeId)) continue;
           seen.add(log.recipeId);
           candidates.push({ recipeId: log.recipeId, cookedOn: log.cookedOn });
         }
         setQueue((prev) => (prev.length > 0 ? prev : candidates));
       } catch {
-        // If cook logs can't be loaded we simply don't prompt.
+        // If cook logs / handled prompts can't be loaded we simply don't prompt.
       }
     }
 
@@ -130,8 +143,15 @@ export default function RatingPrompt() {
   }, [current?.recipeId, current?.cookedOn, userId]);
 
   // Marks the dish as handled so it isn't asked about again, then advances.
+  // The in-memory set is updated synchronously so a focus refresh can't re-add
+  // it before the DB write lands; the write persists it across the user's devices.
   function finish() {
-    if (current && userId) markRecipeRatingHandled(userId, current.recipeId);
+    if (current) {
+      for (const key of ratingPromptKeysForToday(current.recipeId)) {
+        handledRef.current.add(key);
+      }
+      void markRecipeRatingHandled(current.recipeId).catch(() => {});
+    }
     setQueue((q) => q.slice(1));
   }
 
