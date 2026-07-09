@@ -10,53 +10,12 @@ import {
   saveMyRating,
 } from "@/lib/ratings";
 import { useAuth } from "./AuthProvider";
+import StarRow from "./StarRow";
 
 interface RecipeRatingPanelProps {
   recipeId: string;
   // Reports the new cached average (rounded) so the parent can keep recipe.rating in sync.
   onAverageChange?: (average: number | null) => void;
-}
-
-function StarRow({
-  value,
-  size,
-  interactive,
-  onSelect,
-}: {
-  value: number;
-  size: number;
-  interactive?: boolean;
-  onSelect?: (value: number) => void;
-}) {
-  return (
-    <div className="flex items-center gap-0.5">
-      {[1, 2, 3, 4, 5].map((star) => {
-        const filled = star <= value;
-        const starEl = (
-          <Star
-            size={size}
-            fill={filled ? "currentColor" : "none"}
-            className={filled ? "text-amber-500" : "text-gray-300"}
-          />
-        );
-        if (!interactive) {
-          return <span key={star}>{starEl}</span>;
-        }
-        return (
-          <button
-            key={star}
-            type="button"
-            onClick={() => onSelect?.(star)}
-            className="p-0.5 rounded-md transition-transform hover:scale-110"
-            aria-label={`Set your rating to ${star} star${star === 1 ? "" : "s"}`}
-            title={`Set your rating to ${star} star${star === 1 ? "" : "s"}`}
-          >
-            {starEl}
-          </button>
-        );
-      })}
-    </div>
-  );
 }
 
 export default function RecipeRatingPanel({

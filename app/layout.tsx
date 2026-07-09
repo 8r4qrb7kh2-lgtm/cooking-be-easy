@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import AuthProvider from "@/components/AuthProvider";
 import Navigation from "@/components/Navigation";
+import RatingPrompt from "@/components/RatingPrompt";
 
 export const metadata: Metadata = {
   title: "Cooking be easy",
@@ -24,6 +25,7 @@ export default function RootLayout({
         <AuthProvider>
           <Navigation />
           <main className="max-w-4xl mx-auto px-4 py-6 pb-24">{children}</main>
+          <RatingPrompt />
         </AuthProvider>
       </body>
     </html>
