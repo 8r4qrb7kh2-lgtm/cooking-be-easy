@@ -51,9 +51,28 @@ export async function getCookLogs(): Promise<CookLogEntry[]> {
     .filter((log): log is CookLogEntry => log !== null);
 }
 
-// Records that the current user made this recipe today. Idempotent per
-// user/recipe/day via the unique constraint, so tapping "Yes" twice is safe.
+// Whether this recipe already has a cook log for today visible to the current
+// user. RLS scopes the query to the user's own logs plus their household's, so
+// this is true once anyone cooking together has confirmed the dish today.
+export async function wasCookedToday(recipeId: string): Promise<boolean> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("recipe_cook_logs")
+    .select("id")
+    .eq("recipe_id", recipeId)
+    .eq("cooked_on", todayKey())
+    .limit(1);
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
+// Records that this recipe was made today. Capped at one log per dish per day
+// across a household: if anyone the user shares logs with (or the user
+// themselves) has already logged it today, this is a no-op, so several people
+// cooking the same dish together don't each create a log.
 export async function logCookedToday(recipeId: string): Promise<void> {
+  if (await wasCookedToday(recipeId)) return;
+
   const supabase = getSupabase();
   const userId = await getUserId();
   const householdId = await getHouseholdId();

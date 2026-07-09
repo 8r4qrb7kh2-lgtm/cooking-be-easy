@@ -14,7 +14,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Ingredient, Recipe } from "@/lib/types";
 import { getRecipe } from "@/lib/storage";
-import { logCookedToday } from "@/lib/cookLog";
+import { logCookedToday, wasCookedToday } from "@/lib/cookLog";
 import { markRecipeViewed } from "@/lib/recentViews";
 import { extractTimerPresets } from "@/lib/globalTimers";
 import GlobalTimerTray, { SuggestedTimer } from "@/components/GlobalTimerTray";
@@ -209,15 +209,24 @@ export default function CookingModePage() {
   );
 
   useEffect(() => {
-    getRecipe(id).then((r) => {
+    let cancelled = false;
+    getRecipe(id).then(async (r) => {
       if (!r || !r.steps || r.steps.length === 0) {
         router.replace("/cook");
         return;
       }
+      if (cancelled) return;
       setRecipe(r);
       markRecipeViewed(r.id);
-      setShowCookPrompt(true);
+      // Only ask "Cooking this today?" if the dish hasn't already been logged
+      // today. Once anyone cooking together confirms it, the prompt stops
+      // showing for the rest of the day so a dish is logged at most once daily.
+      const alreadyLogged = await wasCookedToday(r.id).catch(() => false);
+      if (!cancelled && !alreadyLogged) setShowCookPrompt(true);
     });
+    return () => {
+      cancelled = true;
+    };
   }, [id, router]);
 
   async function confirmCookedToday() {
