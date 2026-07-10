@@ -8,15 +8,14 @@ import { getCookLogs } from "@/lib/cookLog";
 import { getRecipe } from "@/lib/storage";
 import {
   getDisplayName,
+  getMyRatedRecipeIds,
   getRatingsForRecipe,
   saveMyRating,
 } from "@/lib/ratings";
 import { daysBetweenKeys, todayKey } from "@/lib/mealPlan";
 import {
-  getHandledRatingPrompts,
+  getHandledRecipeIds,
   markRecipeRatingHandled,
-  ratingPromptKey,
-  ratingPromptKeysForToday,
 } from "@/lib/ratingPrompts";
 
 interface RatingCandidate {
@@ -25,8 +24,8 @@ interface RatingCandidate {
 }
 
 // Global "How was it?" prompt. When a user opens the app 1–2 days after they
-// logged cooking a dish, this asks them to rate it — once per dish. Mounted in
-// the layout so it surfaces over whatever page they land on.
+// logged cooking a dish, this asks them to rate it — once per dish, ever. Mounted
+// in the layout so it surfaces over whatever page they land on.
 export default function RatingPrompt() {
   const { user } = useAuth();
   const userId = user?.id ?? null;
@@ -40,20 +39,25 @@ export default function RatingPrompt() {
     name: string;
     existingRating: number;
   } | null>(null);
+  // The stars the user has tapped for the active dish. Nothing is written until
+  // they hit Apply, so a misclick can be corrected first. Reset per dish.
+  const [selected, setSelected] = useState(0);
   const [saving, setSaving] = useState(false);
 
-  // Prompts handled this session, as ratingPromptKey() strings. Seeded from the
-  // DB on each refresh and added to the instant a user rates/dismisses, so an
-  // in-flight write can never let a just-answered dish reappear.
+  // Recipe IDs this user has already dealt with — prompted about before (rated or
+  // dismissed) or already rated anywhere — none of which should be asked about
+  // again. Seeded from the DB on each refresh and added to the instant a user
+  // rates/dismisses, so an in-flight write can never let a just-answered dish
+  // reappear.
   const handledRef = useRef<Set<string>>(new Set());
 
   const current = queue[0] ?? null;
 
-  // Gather the dishes this user cooked 1–2 days ago that they haven't been
-  // asked to rate yet (anything older than 2 days is skipped). Re-runs when the
-  // app regains focus — todayKey() is re-read each time — so a PWA reopened the
-  // next day still prompts without a hard reload. Never clobbers a prompt the
-  // user is already partway through answering.
+  // Gather the dishes this user cooked 1–2 days ago that they haven't already
+  // rated or been asked to rate (anything older than 2 days is skipped). Re-runs
+  // when the app regains focus — todayKey() is re-read each time — so a PWA
+  // reopened the next day still prompts without a hard reload. Never clobbers a
+  // prompt the user is already partway through answering.
   useEffect(() => {
     if (!userId) {
       setQueue([]);
@@ -65,12 +69,16 @@ export default function RatingPrompt() {
 
     async function refresh() {
       try {
-        const [logs, handled] = await Promise.all([
+        const [logs, handledIds, ratedIds] = await Promise.all([
           getCookLogs(),
-          getHandledRatingPrompts(),
+          getHandledRecipeIds(),
+          getMyRatedRecipeIds(),
         ]);
         if (!active) return;
-        handled.forEach((key) => handledRef.current.add(key));
+        // A dish already rated is treated as handled too: the first rating
+        // sticks, so we never ask again even if it was rated from the recipe page.
+        handledIds.forEach((id) => handledRef.current.add(id));
+        ratedIds.forEach((id) => handledRef.current.add(id));
         const today = todayKey();
         const seen = new Set<string>();
         const candidates: RatingCandidate[] = [];
@@ -80,8 +88,7 @@ export default function RatingPrompt() {
         for (const log of mine) {
           const daysAgo = daysBetweenKeys(log.cookedOn, today);
           if (daysAgo !== 1 && daysAgo !== 2) continue;
-          if (handledRef.current.has(ratingPromptKey(log.recipeId, log.cookedOn)))
-            continue;
+          if (handledRef.current.has(log.recipeId)) continue;
           if (seen.has(log.recipeId)) continue;
           seen.add(log.recipeId);
           candidates.push({ recipeId: log.recipeId, cookedOn: log.cookedOn });
@@ -142,24 +149,34 @@ export default function RatingPrompt() {
     };
   }, [current?.recipeId, current?.cookedOn, userId]);
 
+  // Start each dish with a clean selection (or its existing rating, if any), so a
+  // choice carried over from the previous prompt can't be applied by accident.
+  useEffect(() => {
+    setSelected(loaded?.existingRating ?? 0);
+  }, [loaded?.recipeId, loaded?.existingRating]);
+
   // Marks the dish as handled so it isn't asked about again, then advances.
   // The in-memory set is updated synchronously so a focus refresh can't re-add
   // it before the DB write lands; the write persists it across the user's devices.
   function finish() {
     if (current) {
-      for (const key of ratingPromptKeysForToday(current.recipeId)) {
-        handledRef.current.add(key);
-      }
+      handledRef.current.add(current.recipeId);
       void markRecipeRatingHandled(current.recipeId).catch(() => {});
     }
     setQueue((q) => q.slice(1));
   }
 
-  async function rate(star: number) {
-    if (!current || !userId || saving) return;
+  // Commit the stars the user settled on. Only reachable once they've picked at
+  // least one star and pressed Apply.
+  async function apply() {
+    if (!current || !userId || saving || selected === 0) return;
     setSaving(true);
     try {
-      await saveMyRating({ recipeId: current.recipeId, userName, rating: star });
+      await saveMyRating({
+        recipeId: current.recipeId,
+        userName,
+        rating: selected,
+      });
     } catch {
       // Even if saving fails we close so the user isn't nagged repeatedly.
     } finally {
@@ -196,26 +213,43 @@ export default function RatingPrompt() {
         </p>
         <div className="mt-4 flex justify-center">
           <StarRow
-            value={loaded.existingRating}
+            value={selected}
             size={36}
             interactive
-            onSelect={rate}
+            onSelect={setSelected}
           />
         </div>
-        <div className="mt-4 flex items-center justify-center">
-          {saving ? (
-            <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
-              <Loader2 size={13} className="animate-spin" /> Saving…
-            </span>
-          ) : (
-            <button
-              type="button"
-              onClick={finish}
-              className="text-xs font-medium text-gray-400 hover:text-gray-600 transition-colors"
-            >
-              Not now
-            </button>
-          )}
+        <p
+          className="mt-2 text-center text-xs text-gray-400"
+          aria-live="polite"
+        >
+          {selected > 0
+            ? `${selected} star${selected === 1 ? "" : "s"} selected`
+            : " "}
+        </p>
+        <div className="mt-4 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={finish}
+            disabled={saving}
+            className="text-xs font-medium text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
+          >
+            Not now
+          </button>
+          <button
+            type="button"
+            onClick={apply}
+            disabled={selected === 0 || saving}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400"
+          >
+            {saving ? (
+              <>
+                <Loader2 size={14} className="animate-spin" /> Saving…
+              </>
+            ) : (
+              "Apply"
+            )}
+          </button>
         </div>
       </div>
     </div>

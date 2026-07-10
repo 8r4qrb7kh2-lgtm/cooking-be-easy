@@ -59,6 +59,24 @@ export async function getRecipeRatings(): Promise<RecipeRating[]> {
     .filter((rating): rating is RecipeRating => rating !== null);
 }
 
+// The set of recipe IDs the current user has already rated. Used to suppress the
+// post-cook rating prompt for dishes they've rated — the first rating sticks, so
+// they're never asked to rate the same dish again.
+export async function getMyRatedRecipeIds(): Promise<Set<string>> {
+  const supabase = getSupabase();
+  const userId = await getUserId();
+  const { data, error } = await supabase
+    .from("recipe_ratings")
+    .select("recipe_id")
+    .eq("user_id", userId);
+  if (error) throw error;
+  const rated = new Set<string>();
+  for (const row of data ?? []) {
+    if (typeof row.recipe_id === "string") rated.add(row.recipe_id);
+  }
+  return rated;
+}
+
 export async function getRatingsForRecipe(
   recipeId: string
 ): Promise<RecipeRating[]> {
