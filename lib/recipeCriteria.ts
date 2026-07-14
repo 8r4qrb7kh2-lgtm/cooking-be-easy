@@ -30,6 +30,10 @@ export interface RecipeCriterion {
   // beyond the oldest "days since made", unrated is below every rating.
   nullSide: "low" | "high" | null;
   nullLabel: string | null;
+  // When this criterion is a plot axis, recipes with no value for it are left
+  // off the plot entirely instead of shown in a null band (e.g. unrated dishes
+  // shouldn't clutter a rating axis). Filters still use nullSide as usual.
+  hideNullOnPlot?: boolean;
   fixedDomain?: [number, number];
   // Floor for the auto-computed domain max so sparse data still gets a usable axis
   minDomainMax?: number;
@@ -75,6 +79,7 @@ export const RECIPE_CRITERIA: RecipeCriterion[] = [
     getValue: (metrics) => metrics.rating,
     nullSide: "low",
     nullLabel: "Unrated",
+    hideNullOnPlot: true,
     fixedDomain: [1, 5],
     formatTick: (value) => `${Math.round(value)}★`,
   },

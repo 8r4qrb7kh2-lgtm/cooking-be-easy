@@ -502,7 +502,20 @@ export default function PlannerPage() {
     const xCriterion = CRITERIA_BY_ID[xAxisId];
     const yCriterion = CRITERIA_BY_ID[yAxisId];
 
-    const sorted = [...poolRecipes].sort((a, b) =>
+    // Axes like Rating leave value-less recipes (e.g. unrated) off the plot
+    // instead of parking them in a null band. Pool membership is untouched — a
+    // hidden recipe is still counted and still added by "Add all to shopping".
+    const hideNullAxes = [xCriterion, yCriterion].filter(
+      (criterion) => criterion.hideNullOnPlot
+    );
+    const plottable = poolRecipes.filter((recipe) => {
+      if (hideNullAxes.length === 0) return true;
+      const metrics = metricsByRecipeId.get(recipe.id);
+      if (!metrics) return false;
+      return hideNullAxes.every((criterion) => criterion.getValue(metrics) !== null);
+    });
+
+    const sorted = [...plottable].sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
     );
     const xValues = sorted.map((recipe) =>
@@ -745,6 +758,9 @@ export default function PlannerPage() {
   const draggedRecipe = dragView?.active ? recipesById[dragView.recipeId] : undefined;
   const pendingRecipe = pendingPlace ? recipesById[pendingPlace.recipeId] : undefined;
   const { xAxis, yAxis, points } = plotLayout;
+  // Pool recipes dropped from the plot because they have no value on a
+  // hide-null axis (today: unrated dishes when Rating is an axis).
+  const hiddenUnratedCount = poolRecipes.length - points.length;
   const ratingInUse =
     xAxisId === "rating" ||
     yAxisId === "rating" ||
@@ -1208,6 +1224,13 @@ export default function PlannerPage() {
           </label>
         )}
 
+        {hiddenUnratedCount > 0 && points.length > 0 && (
+          <p className="text-xs text-gray-400">
+            {hiddenUnratedCount} unrated recipe{hiddenUnratedCount === 1 ? "" : "s"} not
+            shown on the rating axis.
+          </p>
+        )}
+
         {/* The plot */}
         <div>
           <div className="flex items-stretch gap-1.5">
@@ -1276,9 +1299,13 @@ export default function PlannerPage() {
                   <p className="text-sm text-gray-400">
                     {recipes.length === 0
                       ? "No recipes saved yet."
-                      : poolMode === "manual"
-                        ? "No recipes hand-picked yet — choose some above."
-                        : "No recipes match the filters."}
+                      : hiddenUnratedCount > 0
+                        ? `${hiddenUnratedCount} pool recipe${
+                            hiddenUnratedCount === 1 ? " is" : "s are"
+                          } unrated — nothing to plot on the rating axis.`
+                        : poolMode === "manual"
+                          ? "No recipes hand-picked yet — choose some above."
+                          : "No recipes match the filters."}
                   </p>
                 </div>
               )}
