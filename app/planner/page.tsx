@@ -853,28 +853,28 @@ export default function PlannerPage() {
             return (
               <div
                 key={dayKey}
-                className={`rounded-xl border p-1.5 sm:p-1 ${
+                className={`rounded-xl border p-2 ${
                   isToday ? "border-brand-300 bg-brand-50/40" : "border-gray-200"
                 }`}
               >
                 <div
-                  className={`flex items-baseline gap-1.5 px-1 pb-1 sm:flex-col sm:gap-0 ${
+                  className={`flex items-baseline gap-1.5 px-0.5 pb-1.5 sm:flex-col sm:gap-0 ${
                     isPast ? "opacity-60" : ""
                   }`}
                 >
                   <span
-                    className={`text-xs font-semibold ${
+                    className={`text-sm font-semibold ${
                       isToday ? "text-brand-700" : "text-gray-700"
                     }`}
                   >
                     {date.toLocaleDateString(undefined, { weekday: "short" })}
                   </span>
-                  <span className={`text-[11px] ${isToday ? "text-brand-600" : "text-gray-400"}`}>
+                  <span className={`text-xs ${isToday ? "text-brand-600" : "text-gray-400"}`}>
                     {date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-1 sm:gap-1">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-1 sm:gap-1.5">
                   {MEAL_SLOTS.map((slot) => {
                     const slotKey = slotKeyFor(dayKey, slot);
                     const slotEntries = entriesBySlotKey.get(slotKey) ?? [];
@@ -885,7 +885,7 @@ export default function PlannerPage() {
                         key={slot}
                         data-slot-key={slotKey}
                         onClick={() => handleSlotClick(dayKey, slot)}
-                        className={`rounded-lg border p-1.5 min-h-[3.5rem] transition-colors ${
+                        className={`rounded-lg border p-2 min-h-[5.25rem] transition-colors ${
                           isDropTarget
                             ? "border-brand-400 bg-brand-100 ring-2 ring-brand-300"
                             : pendingPlace
@@ -893,11 +893,11 @@ export default function PlannerPage() {
                               : "border-gray-100 bg-gray-50/70"
                         }`}
                       >
-                        <div className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-gray-400 pointer-events-none">
-                          {slot === "lunch" ? <Sun size={10} /> : <Moon size={10} />}
+                        <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-gray-400 pointer-events-none">
+                          {slot === "lunch" ? <Sun size={11} /> : <Moon size={11} />}
                           {SLOT_LABELS[slot]}
                         </div>
-                        <div className="mt-1 space-y-1">
+                        <div className="mt-1.5 space-y-1.5">
                           {slotEntries.map((entry) => {
                             const recipe = recipesById[entry.recipeId];
                             const isSelected = pendingPlace?.entryId === entry.id;
@@ -923,15 +923,35 @@ export default function PlannerPage() {
                                 onPointerCancel={handleChipPointerCancel}
                                 onClick={(event) => event.stopPropagation()}
                                 onContextMenu={(event) => event.preventDefault()}
-                                className={`flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] leading-tight cursor-grab touch-none select-none transition-opacity ${
+                                title={recipe?.name ?? undefined}
+                                className={`relative overflow-hidden rounded-lg border cursor-grab touch-none select-none transition-opacity ${
                                   isSelected
-                                    ? "border-brand-400 bg-brand-100 text-brand-900 ring-1 ring-brand-400"
-                                    : "border-brand-100 bg-brand-50 text-brand-800"
+                                    ? "border-brand-400 ring-1 ring-brand-400"
+                                    : "border-brand-100"
                                 } ${isBeingDragged ? "opacity-40" : ""}`}
                               >
-                                <span className="flex-1 truncate">
+                                {recipe?.dishPhotos[0] ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={recipe.dishPhotos[0]}
+                                    alt=""
+                                    draggable={false}
+                                    className="h-14 w-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="flex h-14 w-full items-center justify-center bg-brand-100/50">
+                                    <ImageIcon size={18} className="text-brand-300" />
+                                  </div>
+                                )}
+                                <div
+                                  className={`truncate px-1.5 py-1 text-[11px] font-medium leading-tight ${
+                                    isSelected
+                                      ? "bg-brand-100 text-brand-900"
+                                      : "bg-brand-50 text-brand-800"
+                                  }`}
+                                >
                                   {recipe?.name ?? "Recipe"}
-                                </span>
+                                </div>
                                 <button
                                   type="button"
                                   onPointerDown={(event) => event.stopPropagation()}
@@ -939,7 +959,7 @@ export default function PlannerPage() {
                                     event.stopPropagation();
                                     removeEntry(entry.id);
                                   }}
-                                  className="shrink-0 text-brand-300 hover:text-red-500 transition-colors"
+                                  className="absolute right-1 top-1 rounded-full bg-white/85 p-0.5 text-gray-500 shadow-sm hover:text-red-500 transition-colors"
                                   aria-label={`Remove ${recipe?.name ?? "recipe"}`}
                                 >
                                   <X size={12} />
