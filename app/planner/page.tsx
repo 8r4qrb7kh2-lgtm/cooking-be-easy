@@ -170,10 +170,15 @@ function buildAxisLayout(
   const bandBoundary =
     criterion.nullSide === "low" ? NULL_BAND_FRACTION : 1 - NULL_BAND_FRACTION;
 
+  // Warps the linear [0,1] position so an axis can be non-linear (e.g. the
+  // days-since-made scale expands as time grows). Applied to points and ticks
+  // alike so gridlines line up with the data.
+  const warp = criterion.warpPosition ?? ((t) => t);
+
   const positionFor = (value: number | null): number => {
     if (value === null) return nullBandCenter;
     const t = clamp((value - low) / (high - low), 0, 1);
-    return regionStart + t * (regionEnd - regionStart);
+    return regionStart + warp(t) * (regionEnd - regionStart);
   };
 
   const ticks: AxisTick[] = [];
@@ -181,7 +186,7 @@ function buildAxisLayout(
     const value = low + ((high - low) * i) / 4;
     const label = criterion.formatTick(value);
     if (ticks.length > 0 && ticks[ticks.length - 1].label === label) continue;
-    ticks.push({ fraction: regionStart + (i / 4) * (regionEnd - regionStart), label });
+    ticks.push({ fraction: regionStart + warp(i / 4) * (regionEnd - regionStart), label });
   }
 
   return { criterion, ticks, hasNullBand, nullBandCenter, bandBoundary, positionFor };

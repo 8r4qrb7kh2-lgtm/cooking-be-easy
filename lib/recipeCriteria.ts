@@ -34,6 +34,10 @@ export interface RecipeCriterion {
   // off the plot entirely instead of shown in a null band (e.g. unrated dishes
   // shouldn't clutter a rating axis). Filters still use nullSide as usual.
   hideNullOnPlot?: boolean;
+  // Optional easing applied to the normalized [0,1] axis position so the scale
+  // needn't be linear. Must map 0→0 and 1→1. `t => t*t`, for example, bunches
+  // small values near the origin and spreads large ones out.
+  warpPosition?: (t: number) => number;
   fixedDomain?: [number, number];
   // Floor for the auto-computed domain max so sparse data still gets a usable axis
   minDomainMax?: number;
@@ -70,6 +74,10 @@ export const RECIPE_CRITERIA: RecipeCriterion[] = [
     nullSide: "high",
     nullLabel: "Never",
     minDomainMax: 7,
+    // Recently-made dishes cluster near the origin; the longer since a dish was
+    // made, the more room it gets — so "made a while ago" recipes spread out
+    // instead of piling up at the high end of a linear scale.
+    warpPosition: (t) => t ** 2,
     formatTick: (value) => `${Math.round(value)}`,
   },
   {
