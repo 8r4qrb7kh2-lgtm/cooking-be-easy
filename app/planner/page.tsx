@@ -485,6 +485,19 @@ export default function PlannerPage() {
     ).length;
   }, [entries, weekStartKey]);
 
+  // Recipe ids already placed in a slot in the currently-visible week. These
+  // drop out of the chart (they're shown in the sticky calendar above instead).
+  const plannedThisWeekIds = useMemo(() => {
+    const weekEndKey = addDaysToKey(weekStartKey, 6);
+    const ids = new Set<string>();
+    for (const entry of entries) {
+      if (entry.planDate >= weekStartKey && entry.planDate <= weekEndKey) {
+        ids.add(entry.recipeId);
+      }
+    }
+    return ids;
+  }, [entries, weekStartKey]);
+
   const statsFor = (recipeId: string) => statsByRecipeId[recipeId] ?? NEVER_MADE_STATS;
 
   const poolRecipes = useMemo(() => {
@@ -502,17 +515,27 @@ export default function PlannerPage() {
     const xCriterion = CRITERIA_BY_ID[xAxisId];
     const yCriterion = CRITERIA_BY_ID[yAxisId];
 
+    // Recipes already planned in the visible week leave the chart entirely.
+    const candidates = poolRecipes.filter(
+      (recipe) => !plannedThisWeekIds.has(recipe.id)
+    );
+
     // Axes like Rating leave value-less recipes (e.g. unrated) off the plot
     // instead of parking them in a null band. Pool membership is untouched — a
     // hidden recipe is still counted and still added by "Add all to shopping".
     const hideNullAxes = [xCriterion, yCriterion].filter(
       (criterion) => criterion.hideNullOnPlot
     );
-    const plottable = poolRecipes.filter((recipe) => {
+    let hiddenUnratedCount = 0;
+    const plottable = candidates.filter((recipe) => {
       if (hideNullAxes.length === 0) return true;
       const metrics = metricsByRecipeId.get(recipe.id);
       if (!metrics) return false;
-      return hideNullAxes.every((criterion) => criterion.getValue(metrics) !== null);
+      const hasValues = hideNullAxes.every(
+        (criterion) => criterion.getValue(metrics) !== null
+      );
+      if (!hasValues) hiddenUnratedCount += 1;
+      return hasValues;
     });
 
     const sorted = [...plottable].sort((a, b) =>
@@ -547,8 +570,8 @@ export default function PlannerPage() {
       };
     });
 
-    return { xAxis, yAxis, points };
-  }, [poolRecipes, metricsByRecipeId, xAxisId, yAxisId]);
+    return { xAxis, yAxis, points, hiddenUnratedCount };
+  }, [poolRecipes, plannedThisWeekIds, metricsByRecipeId, xAxisId, yAxisId]);
 
   const manualPickerRecipes = useMemo(() => {
     const query = manualQuery.trim().toLowerCase();
@@ -757,10 +780,12 @@ export default function PlannerPage() {
   const isCurrentWeek = weekStartKey === startOfWeekKey(today);
   const draggedRecipe = dragView?.active ? recipesById[dragView.recipeId] : undefined;
   const pendingRecipe = pendingPlace ? recipesById[pendingPlace.recipeId] : undefined;
-  const { xAxis, yAxis, points } = plotLayout;
-  // Pool recipes dropped from the plot because they have no value on a
-  // hide-null axis (today: unrated dishes when Rating is an axis).
-  const hiddenUnratedCount = poolRecipes.length - points.length;
+  const { xAxis, yAxis, points, hiddenUnratedCount } = plotLayout;
+  // How many pool recipes are off the chart purely because they're planned this
+  // week — used to explain an empty plot when everything is already scheduled.
+  const plannedFromPoolCount = poolRecipes.filter((recipe) =>
+    plannedThisWeekIds.has(recipe.id)
+  ).length;
   const ratingInUse =
     xAxisId === "rating" ||
     yAxisId === "rating" ||
@@ -807,8 +832,9 @@ export default function PlannerPage() {
         </div>
       )}
 
-      {/* Week calendar */}
-      <section className="bg-white rounded-xl border border-gray-200 p-3 sm:p-4">
+      {/* Week calendar — sticks to the top so it stays visible while scrolling
+          the recipe pool (skipped on mobile, where it's a tall vertical list) */}
+      <section className="sm:sticky sm:top-0 sm:z-30 bg-white rounded-xl border border-gray-200 p-3 sm:p-4 sm:shadow-sm">
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-1">
             <button
@@ -985,8 +1011,8 @@ export default function PlannerPage() {
             <h2 className="text-sm font-semibold text-gray-900">Recipe pool</h2>
             <p className="text-xs text-gray-500 mt-0.5">
               {poolRecipes.length} of {recipes.length} recipe
-              {recipes.length === 1 ? "" : "s"} shown · drag a chip onto a slot, or tap
-              it and then tap a slot
+              {recipes.length === 1 ? "" : "s"} in the pool · drag a chip onto a slot,
+              or tap it and then tap a slot
             </p>
           </div>
           <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-0.5 text-xs font-medium">
@@ -1319,13 +1345,16 @@ export default function PlannerPage() {
                   <p className="text-sm text-gray-400">
                     {recipes.length === 0
                       ? "No recipes saved yet."
-                      : hiddenUnratedCount > 0
-                        ? `${hiddenUnratedCount} pool recipe${
-                            hiddenUnratedCount === 1 ? " is" : "s are"
-                          } unrated — nothing to plot on the rating axis.`
-                        : poolMode === "manual"
-                          ? "No recipes hand-picked yet — choose some above."
-                          : "No recipes match the filters."}
+                      : poolRecipes.length > 0 &&
+                        plannedFromPoolCount === poolRecipes.length
+                        ? "Every recipe in the pool is already planned this week."
+                        : hiddenUnratedCount > 0
+                          ? `${hiddenUnratedCount} pool recipe${
+                              hiddenUnratedCount === 1 ? " is" : "s are"
+                            } unrated — nothing to plot on the rating axis.`
+                          : poolMode === "manual"
+                            ? "No recipes hand-picked yet — choose some above."
+                            : "No recipes match the filters."}
                   </p>
                 </div>
               )}

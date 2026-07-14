@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import AuthProvider from "@/components/AuthProvider";
 import Navigation from "@/components/Navigation";
+import MainContainer from "@/components/MainContainer";
 import RatingPrompt from "@/components/RatingPrompt";
 
 export const metadata: Metadata = {
@@ -24,7 +25,7 @@ export default function RootLayout({
       <body className="min-h-screen bg-app">
         <AuthProvider>
           <Navigation />
-          <main className="max-w-4xl mx-auto px-4 py-6 pb-24">{children}</main>
+          <MainContainer>{children}</MainContainer>
           <RatingPrompt />
         </AuthProvider>
       </body>

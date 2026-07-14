@@ -13,7 +13,12 @@
 html,
 body {
   max-width: 100%;
+  /* `clip` prevents horizontal scroll like `hidden` but, unlike `hidden`, does
+     NOT make the page a scroll container — which would break `position: sticky`
+     (e.g. the planner's pinned week view). `hidden` stays as a fallback for
+     browsers without `clip` support. */
   overflow-x: hidden;
+  overflow-x: clip;
 }
 
 body {

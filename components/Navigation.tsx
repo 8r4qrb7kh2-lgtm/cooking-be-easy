@@ -23,8 +23,9 @@ export default function Navigation() {
 
   return (
     <>
-      {/* Top header */}
-      <header className="surface border-b surface-border sticky top-0 z-50">
+      {/* Top header — scrolls away with the page (stays static) so pages like the
+          planner can pin their own compact header at the very top instead. */}
+      <header className="surface border-b surface-border">
         <div className="max-w-4xl mx-auto px-4 h-28 sm:h-32 flex items-center gap-2 sm:gap-3 min-w-0">
           <GooseChefLogo variant="header" size={176} />
           <div className="flex-1" />
