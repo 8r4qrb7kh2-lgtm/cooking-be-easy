@@ -18,6 +18,7 @@ import { logCookedToday, wasCookedToday } from "@/lib/cookLog";
 import { markRecipeViewed } from "@/lib/recentViews";
 import { extractTimerPresets } from "@/lib/globalTimers";
 import GlobalTimerTray, { SuggestedTimer } from "@/components/GlobalTimerTray";
+import RecipeTableView from "@/components/RecipeTableView";
 import {
   buildIngredientMatchers,
   findStepIngredientCitations,
@@ -35,13 +36,17 @@ import {
   ChevronRight,
   Clock3,
   Flame,
+  List,
   Loader2,
   Moon,
   RotateCcw,
   Sun,
+  Table2,
   UtensilsCrossed,
   X,
 } from "lucide-react";
+
+type CookingView = "steps" | "table";
 
 interface ConvertedIngredient {
   convertedQuantity: string;
@@ -195,6 +200,7 @@ export default function CookingModePage() {
   >(null);
   const [showSourceSteps, setShowSourceSteps] = useState(false);
   const [mobileIngredientsOpen, setMobileIngredientsOpen] = useState(false);
+  const [cookingView, setCookingView] = useState<CookingView>("steps");
 
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const [wakeLockAvailable, setWakeLockAvailable] = useState(false);
@@ -345,6 +351,8 @@ export default function CookingModePage() {
     showSourceSteps && hasDistinctSourceSteps
       ? recipe?.sourceSteps ?? []
       : recipe?.steps ?? [];
+  const stepSourceKey =
+    showSourceSteps && hasDistinctSourceSteps ? "source" : "cooking";
   const totalSteps = recipeSteps.length;
   const step = recipeSteps[currentStep] ?? "";
   const nextStep =
@@ -378,7 +386,6 @@ export default function CookingModePage() {
       unit: ingredient.unit,
     }));
     const stepsPayload = recipeSteps;
-    const stepSourceKey = showSourceSteps && hasDistinctSourceSteps ? "source" : "cooking";
 
     if (ingredientsPayload.length === 0 || stepsPayload.length === 0) {
       setAiFirstStepByIngredientId({});
@@ -466,7 +473,7 @@ export default function CookingModePage() {
     return () => {
       cancelled = true;
     };
-  }, [hasDistinctSourceSteps, recipe, recipeSteps, showSourceSteps]);
+  }, [recipe, recipeSteps, stepSourceKey]);
 
   const ingredientById = useMemo(
     () => new Map(recipeIngredients.map((ingredient) => [ingredient.id, ingredient])),
@@ -633,6 +640,12 @@ export default function CookingModePage() {
     setConversions({});
     setConvertInputs({});
   }, [quantityScale]);
+
+  // The table lists every ingredient itself, so the slide-over would just sit
+  // there holding the body scroll lock.
+  useEffect(() => {
+    if (cookingView === "table") setMobileIngredientsOpen(false);
+  }, [cookingView]);
 
   useEffect(() => {
     if (!mobileIngredientsOpen || typeof window === "undefined") return;
@@ -833,6 +846,57 @@ export default function CookingModePage() {
     );
   }
 
+  function renderQuantityScaleControls() {
+    return (
+      <div className="p-2.5 rounded-lg border border-gray-200 bg-gray-50">
+        <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">
+          Scale quantities
+        </p>
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <input
+            type="number"
+            min="0.1"
+            step="0.1"
+            value={quantityScaleInput}
+            onChange={(e) => setQuantityScaleInput(e.target.value)}
+            className="w-20 text-xs px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:border-brand-400 bg-white"
+          />
+          <button
+            onClick={() => applyQuantityScale("multiply")}
+            className="text-xs px-2.5 py-1 rounded-md bg-brand-600 text-white hover:bg-brand-700 transition-colors"
+          >
+            Multiply
+          </button>
+          <button
+            onClick={() => applyQuantityScale("divide")}
+            className="text-xs px-2.5 py-1 rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
+          >
+            Divide
+          </button>
+        </div>
+        <div className="mt-1.5 flex items-center justify-between">
+          <span className="text-[11px] text-gray-500">
+            Current: x{formatScaledQuantity(quantityScale)}
+          </span>
+          <button
+            onClick={() => setQuantityScale(1)}
+            className={`text-[11px] text-brand-700 hover:underline ${
+              quantityScale === 1 ? "opacity-0 pointer-events-none" : ""
+            }`}
+          >
+            Reset
+          </button>
+        </div>
+        {ratedServingsYielded !== null && scaledServingsYielded !== null && (
+          <p className="mt-1 text-[11px] text-gray-500">
+            Rated yield: {formatServingCount(ratedServingsYielded)} -&gt;{" "}
+            {formatServingCount(scaledServingsYielded)}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   function renderIngredientPanel(
     panelRef: MutableRefObject<HTMLDivElement | null>,
     stepRef: MutableRefObject<HTMLDivElement | null>,
@@ -861,52 +925,7 @@ export default function CookingModePage() {
             </button>
           </div>
 
-          <div className="mt-2.5 p-2.5 rounded-lg border border-gray-200 bg-gray-50">
-            <p className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">
-              Scale quantities
-            </p>
-            <div className="mt-1.5 flex items-center gap-1.5">
-              <input
-                type="number"
-                min="0.1"
-                step="0.1"
-                value={quantityScaleInput}
-                onChange={(e) => setQuantityScaleInput(e.target.value)}
-                className="w-20 text-xs px-2 py-1 border border-gray-300 rounded-md focus:outline-none focus:border-brand-400 bg-white"
-              />
-              <button
-                onClick={() => applyQuantityScale("multiply")}
-                className="text-xs px-2.5 py-1 rounded-md bg-brand-600 text-white hover:bg-brand-700 transition-colors"
-              >
-                Multiply
-              </button>
-              <button
-                onClick={() => applyQuantityScale("divide")}
-                className="text-xs px-2.5 py-1 rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
-              >
-                Divide
-              </button>
-            </div>
-            <div className="mt-1.5 flex items-center justify-between">
-              <span className="text-[11px] text-gray-500">
-                Current: x{formatScaledQuantity(quantityScale)}
-              </span>
-              <button
-                onClick={() => setQuantityScale(1)}
-                className={`text-[11px] text-brand-700 hover:underline ${
-                  quantityScale === 1 ? "opacity-0 pointer-events-none" : ""
-                }`}
-              >
-                Reset
-              </button>
-            </div>
-            {ratedServingsYielded !== null && scaledServingsYielded !== null && (
-              <p className="mt-1 text-[11px] text-gray-500">
-                Rated yield: {formatServingCount(ratedServingsYielded)} -&gt;{" "}
-                {formatServingCount(scaledServingsYielded)}
-              </p>
-            )}
-          </div>
+          <div className="mt-2.5">{renderQuantityScaleControls()}</div>
         </div>
 
         <div
@@ -1035,6 +1054,30 @@ export default function CookingModePage() {
       </div>
 
       <div className="flex flex-wrap gap-2 mb-5">
+        <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
+          {(
+            [
+              { value: "steps", label: "Steps", icon: List },
+              { value: "table", label: "Table", icon: Table2 },
+            ] as const
+          ).map(({ value, label, icon: Icon }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setCookingView(value)}
+              aria-pressed={cookingView === value}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                cookingView === value
+                  ? "bg-brand-600 text-white"
+                  : "text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              <Icon size={14} />
+              {label}
+            </button>
+          ))}
+        </div>
+
         {hasDistinctSourceSteps && (
           <button
             type="button"
@@ -1084,7 +1127,29 @@ export default function CookingModePage() {
 
       <GlobalTimerTray className="mb-6" suggestedTimers={suggestedStepTimers} />
 
-      <div className="flex flex-col lg:flex-row gap-6">
+      {cookingView === "table" && (
+        <div className="mb-4">
+          <div className="mb-4 sm:max-w-xs">{renderQuantityScaleControls()}</div>
+
+          <RecipeTableView
+            recipeId={recipe.id}
+            recipeUpdatedAt={recipe.updatedAt}
+            stepSourceKey={stepSourceKey}
+            ingredients={recipeIngredients}
+            steps={recipeSteps}
+            firstStepById={firstMentionStepById}
+            quantityScale={quantityScale}
+            currentStep={currentStep}
+            onSelectStep={setCurrentStep}
+          />
+        </div>
+      )}
+
+      <div
+        className={`flex flex-col lg:flex-row gap-6 ${
+          cookingView === "table" ? "hidden" : ""
+        }`}
+      >
         <div className="flex-1">
           <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-4">
             <div className="flex items-start gap-4">
@@ -1124,37 +1189,39 @@ export default function CookingModePage() {
         </div>
       </div>
 
-      <div
-        className="fixed inset-x-0 z-40 px-4"
-        style={{ bottom: "calc(env(safe-area-inset-bottom) + 4.75rem)" }}
-      >
-        <div className="mx-auto max-w-5xl lg:pr-[21.5rem]">
-          <div className="rounded-2xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-white/80">
-            <div className="flex gap-3">
-              <button
-                onClick={() => setCurrentStep((s) => Math.max(0, s - 1))}
-                disabled={currentStep === 0}
-                className="flex-1 flex items-center justify-center gap-2 py-3 bg-white border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                <ChevronLeft size={18} />
-                Previous
-              </button>
-              <button
-                onClick={() =>
-                  setCurrentStep((s) => Math.min(totalSteps - 1, s + 1))
-                }
-                disabled={currentStep === totalSteps - 1}
-                className="flex-1 flex items-center justify-center gap-2 py-3 bg-brand-600 text-white rounded-xl font-medium hover:bg-brand-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                Next
-                <ChevronRight size={18} />
-              </button>
+      {cookingView === "steps" && (
+        <div
+          className="fixed inset-x-0 z-40 px-4"
+          style={{ bottom: "calc(env(safe-area-inset-bottom) + 4.75rem)" }}
+        >
+          <div className="mx-auto max-w-5xl lg:pr-[21.5rem]">
+            <div className="rounded-2xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-white/80">
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setCurrentStep((s) => Math.max(0, s - 1))}
+                  disabled={currentStep === 0}
+                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-white border border-gray-200 rounded-xl font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft size={18} />
+                  Previous
+                </button>
+                <button
+                  onClick={() =>
+                    setCurrentStep((s) => Math.min(totalSteps - 1, s + 1))
+                  }
+                  disabled={currentStep === totalSteps - 1}
+                  className="flex-1 flex items-center justify-center gap-2 py-3 bg-brand-600 text-white rounded-xl font-medium hover:bg-brand-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Next
+                  <ChevronRight size={18} />
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {!mobileIngredientsOpen && (
+      {cookingView === "steps" && !mobileIngredientsOpen && (
         <button
           type="button"
           onClick={() => setMobileIngredientsOpen(true)}
