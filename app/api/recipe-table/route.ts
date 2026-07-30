@@ -7,6 +7,18 @@ const client = new Anthropic();
 
 const MAX_LABEL_LENGTH = 48;
 
+/** Trims an over-long label back to a clause or word boundary, never mid-word. */
+function truncateLabel(label: string): string {
+  if (label.length <= MAX_LABEL_LENGTH) return label;
+
+  const head = label.slice(0, MAX_LABEL_LENGTH);
+  const lastClause = head.lastIndexOf(",");
+  if (lastClause > MAX_LABEL_LENGTH / 3) return head.slice(0, lastClause);
+
+  const lastWord = head.lastIndexOf(" ");
+  return (lastWord > 0 ? head.slice(0, lastWord) : head).replace(/[.;:,]+$/, "");
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { steps, ingredients } = await request.json();
@@ -108,7 +120,7 @@ Return ONLY valid JSON in this exact format:
           .trim();
         if (!label) continue;
 
-        labelByStep[String(stepIndex)] = label.slice(0, MAX_LABEL_LENGTH);
+        labelByStep[String(stepIndex)] = truncateLabel(label);
       }
     }
 

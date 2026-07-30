@@ -145,31 +145,40 @@ export default function RecipeTableView({
     );
   }
 
-  const cellBorder = "border border-brand-700";
+  // Collapsed borders belong to the table rather than the cell, so they stay
+  // put while a sticky cell slides over them. Drawing each cell's own right and
+  // bottom edge (with the table closing the top) keeps the grid intact and lets
+  // the pinned ingredient column carry its borders along as it sticks.
+  const cellBorder = "border-b border-r border-brand-700";
+  const firstColumnBorder = `${cellBorder} border-l`;
 
   return (
     <div>
       <div className="rounded-2xl bg-[#fdfbe7] p-3 shadow-sm sm:p-4">
         <div className="overflow-x-auto">
-          <table
-            className={`w-full min-w-full border-collapse bg-white text-sm leading-snug text-gray-900 sm:text-[15px] ${cellBorder}`}
-          >
+          <table className="w-full min-w-full border-separate border-spacing-0 border-t border-brand-700 bg-white text-sm leading-snug text-gray-900 sm:text-[15px]">
             <tbody>
               {table.prepRows.map((prepRow) => (
                 <tr key={`prep-${prepRow.stepIndex}`}>
                   <td
                     colSpan={columnCount}
-                    className={`${cellBorder} p-0 ${
-                      prepRow.stepIndex === currentStep ? "bg-brand-50" : ""
+                    className={`${firstColumnBorder} p-0 ${
+                      prepRow.stepIndex === currentStep
+                        ? "bg-brand-50"
+                        : "bg-white"
                     }`}
                   >
                     <button
                       type="button"
                       onClick={() => onSelectStep(prepRow.stepIndex)}
                       title={prepRow.text}
-                      className="block w-full px-3 py-2 text-center transition-colors hover:bg-brand-50"
+                      className="block w-full px-3 py-2 text-left transition-colors hover:bg-brand-50 sm:text-center"
                     >
-                      {prepRow.text}
+                      {/* These rows span the whole table, so their text would
+                          scroll off with it — pin it beside the frozen column. */}
+                      <span className="sticky left-3 inline-block">
+                        {prepRow.text}
+                      </span>
                     </button>
                   </td>
                 </tr>
@@ -178,8 +187,8 @@ export default function RecipeTableView({
               {table.rows.map((row, rowIndex) => (
                 <tr key={row.ingredient.id}>
                   <td
-                    className={`${cellBorder} px-3 py-2 align-middle ${
-                      row.stepIndex === currentStep ? "bg-brand-50" : ""
+                    className={`${firstColumnBorder} sticky left-0 z-10 px-3 py-2 align-middle ${
+                      row.stepIndex === currentStep ? "bg-brand-50" : "bg-white"
                     }`}
                     style={{ minWidth: "10.5rem" }}
                   >
