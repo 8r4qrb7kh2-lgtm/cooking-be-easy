@@ -144,6 +144,7 @@ function mapEntryRow(row: any): MealPlanEntry | null {
     recipeId: row.recipe_id,
     planDate: row.plan_date.slice(0, 10),
     slot: row.slot,
+    isLeftovers: row.is_leftovers === true,
   };
 }
 
@@ -178,6 +179,7 @@ export async function addMealPlanEntry(entry: MealPlanEntry): Promise<void> {
     recipe_id: entry.recipeId,
     plan_date: entry.planDate,
     slot: entry.slot,
+    is_leftovers: entry.isLeftovers,
     ...(householdId ? { household_id: householdId } : {}),
   });
   if (error) throw error;

@@ -111,6 +111,8 @@ create table meal_plan_entries (
   recipe_id text not null,
   plan_date date not null,
   slot text not null check (slot in ('lunch', 'dinner')),
+  -- true = this slot is leftovers of an earlier meal, not a fresh cook
+  is_leftovers boolean not null default false,
   created_at timestamptz not null default now()
 );
 alter table meal_plan_entries enable row level security;

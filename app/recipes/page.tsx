@@ -5,7 +5,12 @@ import Link from "next/link";
 import { Recipe } from "@/lib/types";
 import { getRecipes, deleteRecipe } from "@/lib/storage";
 import { getRecentRecipeViews, RecentRecipeViews } from "@/lib/recentViews";
-import { RecipeSortOption, sortRecipes } from "@/lib/recipeSort";
+import { getCookLogs } from "@/lib/cookLog";
+import {
+  LastCookedByRecipeId,
+  RecipeSortOption,
+  sortRecipes,
+} from "@/lib/recipeSort";
 import { Plus, Trash2, UtensilsCrossed, ImageIcon, Search } from "lucide-react";
 import PageLoadingScreen from "@/components/PageLoadingScreen";
 
@@ -16,19 +21,35 @@ export default function RecipesPage() {
   const [sortOption, setSortOption] = useState<RecipeSortOption>("recently-viewed");
   const [recentViewsByRecipeId, setRecentViewsByRecipeId] =
     useState<RecentRecipeViews>({});
+  const [lastCookedByRecipeId, setLastCookedByRecipeId] =
+    useState<LastCookedByRecipeId>({});
 
   useEffect(() => {
     let mounted = true;
 
     async function load() {
       try {
-        const loadedRecipes = await getRecipes();
+        // Cook logs only feed the "last cooked" sort, so a failure there just
+        // leaves that option ordering by the usual fallbacks.
+        const [loadedRecipes, cookLogsResult] = await Promise.all([
+          getRecipes(),
+          getCookLogs().catch(() => []),
+        ]);
 
         if (!mounted) {
           return;
         }
 
+        const lastCooked: LastCookedByRecipeId = {};
+        for (const log of cookLogsResult) {
+          const current = lastCooked[log.recipeId];
+          if (!current || log.cookedOn > current) {
+            lastCooked[log.recipeId] = log.cookedOn;
+          }
+        }
+
         setRecipes(loadedRecipes);
+        setLastCookedByRecipeId(lastCooked);
         setRecentViewsByRecipeId(getRecentRecipeViews());
       } finally {
         if (mounted) {
@@ -63,8 +84,14 @@ export default function RecipesPage() {
         })
       : recipes;
 
-    return sortRecipes(filtered, sortOption, recentViewsByRecipeId);
-  }, [recipes, searchQuery, sortOption, recentViewsByRecipeId]);
+    return sortRecipes(filtered, sortOption, recentViewsByRecipeId, lastCookedByRecipeId);
+  }, [
+    recipes,
+    searchQuery,
+    sortOption,
+    recentViewsByRecipeId,
+    lastCookedByRecipeId,
+  ]);
 
   return (
     <div>
@@ -107,6 +134,7 @@ export default function RecipesPage() {
           >
             <option value="recently-viewed">Recently viewed</option>
             <option value="rating-desc">Rating: high to low</option>
+            <option value="last-cooked-desc">Last cooked: recent to old</option>
           </select>
         </div>
       )}

@@ -213,11 +213,32 @@ function splitSlotKey(slotKey: string): { dateKey: string; slot: MealSlot } | nu
   return { dateKey, slot };
 }
 
+// Lunch comes before dinner on the same day.
+const SLOT_ORDER: Record<MealSlot, number> = { lunch: 0, dinner: 1 };
+
+function isSlotBefore(
+  entry: { planDate: string; slot: MealSlot },
+  dateKey: string,
+  slot: MealSlot
+): boolean {
+  if (entry.planDate !== dateKey) return entry.planDate < dateKey;
+  return SLOT_ORDER[entry.slot] < SLOT_ORDER[slot];
+}
+
 function findSlotKeyAtPoint(x: number, y: number): string | null {
   if (typeof document === "undefined") return null;
   const element = document.elementFromPoint(x, y);
   const slotElement = element?.closest?.("[data-slot-key]");
   return slotElement?.getAttribute("data-slot-key") ?? null;
+}
+
+function formatMealMoment(dateKey: string, slot: MealSlot): string {
+  const label = parseDateKey(dateKey).toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  return `${label} · ${SLOT_LABELS[slot]}`;
 }
 
 function formatWeekRange(weekStartKey: string): string {
@@ -317,6 +338,8 @@ export default function PlannerPage() {
   const [dragView, setDragView] = useState<DragState | null>(null);
   const [hoverSlotKey, setHoverSlotKey] = useState<string | null>(null);
   const [pendingPlace, setPendingPlace] = useState<DragSource | null>(null);
+  // Which slot's "add leftovers" picker is open, as a slot key.
+  const [leftoversPickerKey, setLeftoversPickerKey] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -397,6 +420,31 @@ export default function PlannerPage() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [pendingPlace]);
+
+  // The leftovers picker closes on Escape or a click outside it. Its button and
+  // menu are both tagged data-leftovers-ui so either one counts as "inside".
+  useEffect(() => {
+    if (!leftoversPickerKey) return;
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target as Element | null;
+      if (!target?.closest?.("[data-leftovers-ui]")) setLeftoversPickerKey(null);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setLeftoversPickerKey(null);
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [leftoversPickerKey]);
+
+  // Paging to another week would leave the picker floating over a slot that is
+  // no longer on screen.
+  useEffect(() => {
+    setLeftoversPickerKey(null);
+  }, [weekStartKey]);
 
   const today = todayKey();
 
@@ -526,6 +574,36 @@ export default function PlannerPage() {
     return ids;
   }, [entries, weekStartKey]);
 
+  // Meals that can be a source of leftovers, most recent first. Only dishes
+  // actually cooked qualify — a leftovers entry points at the original meal, so
+  // offering leftovers-of-leftovers would just duplicate rows in the picker.
+  const leftoversSourcesNewestFirst = useMemo(() => {
+    return entries
+      .filter((entry) => !entry.isLeftovers && recipesById[entry.recipeId])
+      .sort((a, b) => {
+        if (a.planDate !== b.planDate) return b.planDate.localeCompare(a.planDate);
+        return SLOT_ORDER[b.slot] - SLOT_ORDER[a.slot];
+      });
+  }, [entries, recipesById]);
+
+  // What "Add all to shopping" buys: the dishes actually being cooked in the
+  // visible week. Leftovers are skipped — that food was bought for the meal it
+  // came from, so shopping for it again would double up.
+  const weekShoppingRecipeIds = useMemo(() => {
+    const weekEndKey = addDaysToKey(weekStartKey, 6);
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of entries) {
+      if (entry.planDate < weekStartKey || entry.planDate > weekEndKey) continue;
+      if (entry.isLeftovers) continue;
+      if (seen.has(entry.recipeId)) continue;
+      if (!recipesById[entry.recipeId]) continue;
+      seen.add(entry.recipeId);
+      ids.push(entry.recipeId);
+    }
+    return ids;
+  }, [entries, weekStartKey, recipesById]);
+
   const statsFor = (recipeId: string) => statsByRecipeId[recipeId] ?? NEVER_MADE_STATS;
 
   const poolRecipes = useMemo(() => {
@@ -654,10 +732,30 @@ export default function PlannerPage() {
         recipeId: source.recipeId,
         planDate: dateKey,
         slot,
+        isLeftovers: false,
       };
       setEntries((prev) => [...prev, entry]);
       await addMealPlanEntry(entry);
     }
+  }
+
+  // Fills a slot with the leftovers of an earlier meal. Same recipe, flagged so
+  // it's badged in the calendar and left out of the shopping list.
+  async function addLeftovers(source: MealPlanEntry, dateKey: string, slot: MealSlot) {
+    setLeftoversPickerKey(null);
+
+    const slotEntries = entriesBySlotKey.get(slotKeyFor(dateKey, slot)) ?? [];
+    if (slotEntries.some((entry) => entry.recipeId === source.recipeId)) return;
+
+    const entry: MealPlanEntry = {
+      id: uuidv4(),
+      recipeId: source.recipeId,
+      planDate: dateKey,
+      slot,
+      isLeftovers: true,
+    };
+    setEntries((prev) => [...prev, entry]);
+    await addMealPlanEntry(entry);
   }
 
   function removeEntry(id: string) {
@@ -666,10 +764,10 @@ export default function PlannerPage() {
     void removeMealPlanEntry(id);
   }
 
-  // Adds every recipe currently shown in the pool to the shopping list,
+  // Adds the dishes planned into this week's meal slots to the shopping list,
   // merging with (not replacing) whatever is already selected there.
-  async function addPoolToShopping() {
-    if (addingToShopping || poolRecipes.length === 0) return;
+  async function addPlannedToShopping() {
+    if (addingToShopping || weekShoppingRecipeIds.length === 0) return;
     setAddingToShopping(true);
     setShoppingMessage(null);
     try {
@@ -677,14 +775,15 @@ export default function PlannerPage() {
         getShoppingList(),
         getWeeklyPlanIds(),
       ]);
-      const poolIds = poolRecipes.map((recipe) => recipe.id);
-      const mergedIds = Array.from(new Set([...existingIds, ...poolIds]));
+      const mergedIds = Array.from(
+        new Set([...existingIds, ...weekShoppingRecipeIds])
+      );
       const addedCount = mergedIds.length - existingIds.length;
       const nextList = buildPreservedShoppingList(mergedIds, recipesById, existingList);
       await Promise.all([setWeeklyPlanIds(mergedIds), saveShoppingList(nextList)]);
       setShoppingMessage(
         addedCount === 0
-          ? "Those recipes are already on your shopping list."
+          ? "This week's meals are already on your shopping list."
           : `Added ${addedCount} recipe${addedCount === 1 ? "" : "s"} to your shopping list.`
       );
     } catch {
@@ -848,9 +947,9 @@ export default function PlannerPage() {
         </div>
         <button
           type="button"
-          onClick={addPoolToShopping}
-          disabled={addingToShopping || poolRecipes.length === 0}
-          title="Add every recipe currently shown in the pool to your shopping list"
+          onClick={addPlannedToShopping}
+          disabled={addingToShopping || weekShoppingRecipeIds.length === 0}
+          title="Add this week's planned meals to your shopping list (leftovers excluded)"
           className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-700 disabled:opacity-50"
         >
           <ShoppingCart size={15} />
@@ -915,7 +1014,7 @@ export default function PlannerPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-7">
-          {weekDayKeys.map((dayKey) => {
+          {weekDayKeys.map((dayKey, dayIndex) => {
             const date = parseDateKey(dayKey);
             const isToday = dayKey === today;
             const isPast = dayKey < today;
@@ -949,13 +1048,24 @@ export default function PlannerPage() {
                     const slotKey = slotKeyFor(dayKey, slot);
                     const slotEntries = entriesBySlotKey.get(slotKey) ?? [];
                     const isDropTarget = hoverSlotKey === slotKey;
+                    const isLeftoversPickerOpen = leftoversPickerKey === slotKey;
+                    // Earlier meals whose dish isn't already in this slot.
+                    const leftoversOptions = isLeftoversPickerOpen
+                      ? leftoversSourcesNewestFirst.filter(
+                          (entry) =>
+                            isSlotBefore(entry, dayKey, slot) &&
+                            !slotEntries.some(
+                              (existing) => existing.recipeId === entry.recipeId
+                            )
+                        )
+                      : [];
 
                     return (
                       <div
                         key={slot}
                         data-slot-key={slotKey}
                         onClick={() => handleSlotClick(dayKey, slot)}
-                        className={`rounded-lg border p-2 min-h-[5.25rem] transition-colors ${
+                        className={`relative rounded-lg border p-2 min-h-[5.25rem] transition-colors ${
                           isDropTarget
                             ? "border-brand-400 bg-brand-100 ring-2 ring-brand-300"
                             : pendingPlace
@@ -963,10 +1073,100 @@ export default function PlannerPage() {
                               : "border-gray-100 bg-gray-50/70"
                         }`}
                       >
-                        <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-gray-400 pointer-events-none">
-                          {slot === "lunch" ? <Sun size={11} /> : <Moon size={11} />}
-                          {SLOT_LABELS[slot]}
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-gray-400 pointer-events-none">
+                            {slot === "lunch" ? <Sun size={11} /> : <Moon size={11} />}
+                            {SLOT_LABELS[slot]}
+                          </span>
+                          <button
+                            type="button"
+                            data-leftovers-ui
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setLeftoversPickerKey((prev) =>
+                                prev === slotKey ? null : slotKey
+                              );
+                            }}
+                            title="Fill with leftovers of an earlier meal"
+                            aria-label={`Add leftovers to ${SLOT_LABELS[slot]} on ${date.toLocaleDateString(
+                              undefined,
+                              { weekday: "long", month: "short", day: "numeric" }
+                            )}`}
+                            aria-expanded={isLeftoversPickerOpen}
+                            className={`-mr-0.5 -mt-0.5 shrink-0 rounded-md p-0.5 transition-colors ${
+                              isLeftoversPickerOpen
+                                ? "bg-brand-100 text-brand-700"
+                                : "text-gray-400 hover:bg-white hover:text-brand-600"
+                            }`}
+                          >
+                            <Plus size={13} />
+                          </button>
                         </div>
+
+                        {/* Anchored away from whichever edge it would spill over:
+                            the dinner column in mobile's two-up layout, and the
+                            last days of the week on the 7-column grid. */}
+                        {isLeftoversPickerOpen && (
+                          <div
+                            data-leftovers-ui
+                            onClick={(event) => event.stopPropagation()}
+                            className={`absolute top-full z-40 mt-1 w-48 max-w-[calc(100vw-2.5rem)] rounded-lg border border-gray-200 bg-white p-1 shadow-lg ${
+                              slot === "dinner" ? "right-0" : "left-0"
+                            } ${
+                              dayIndex >= 5
+                                ? "sm:left-auto sm:right-0"
+                                : "sm:left-0 sm:right-auto"
+                            }`}
+                          >
+                            <p className="px-1.5 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-gray-400">
+                              Leftovers from
+                            </p>
+                            {leftoversOptions.length === 0 ? (
+                              <p className="px-1.5 pb-1.5 text-[11px] text-gray-400">
+                                No earlier meals to take leftovers from.
+                              </p>
+                            ) : (
+                              <div className="max-h-52 overflow-y-auto">
+                                {leftoversOptions.map((option) => {
+                                  const optionRecipe = recipesById[option.recipeId];
+                                  return (
+                                    <button
+                                      key={option.id}
+                                      type="button"
+                                      onClick={() =>
+                                        void addLeftovers(option, dayKey, slot)
+                                      }
+                                      className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left hover:bg-gray-50 transition-colors"
+                                    >
+                                      {optionRecipe?.dishPhotos[0] ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img
+                                          src={optionRecipe.dishPhotos[0]}
+                                          alt=""
+                                          className="h-7 w-7 shrink-0 rounded-md object-cover"
+                                        />
+                                      ) : (
+                                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-gray-100">
+                                          <ImageIcon size={12} className="text-gray-300" />
+                                        </span>
+                                      )}
+                                      <span className="min-w-0 flex-1">
+                                        <span className="block truncate text-[11px] font-medium text-gray-800">
+                                          {optionRecipe?.name ?? "Recipe"}
+                                        </span>
+                                        <span className="block truncate text-[10px] text-gray-400">
+                                          {formatMealMoment(option.planDate, option.slot)}
+                                        </span>
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         <div className="mt-1.5 space-y-1.5">
                           {slotEntries.map((entry) => {
                             const recipe = recipesById[entry.recipeId];
@@ -1012,6 +1212,11 @@ export default function PlannerPage() {
                                   <div className="flex h-14 w-full items-center justify-center bg-brand-100/50">
                                     <ImageIcon size={18} className="text-brand-300" />
                                   </div>
+                                )}
+                                {entry.isLeftovers && (
+                                  <span className="pointer-events-none absolute left-1/2 top-7 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gray-900/80 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white shadow-sm">
+                                    Leftovers
+                                  </span>
                                 )}
                                 <div
                                   className={`truncate px-1.5 py-1 text-[11px] font-medium leading-tight ${

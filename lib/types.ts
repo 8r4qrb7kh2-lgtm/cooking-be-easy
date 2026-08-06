@@ -69,6 +69,7 @@ export interface MealPlanEntry {
   recipeId: string;
   planDate: string; // YYYY-MM-DD (local calendar date)
   slot: MealSlot;
+  isLeftovers: boolean; // filled with an earlier meal's leftovers, not cooked fresh
 }
 
 export interface ShoppingListItem {
