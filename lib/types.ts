@@ -30,6 +30,13 @@ export interface RecipeRating {
   rating: number; // 1-5 stars
 }
 
+export interface RecipeCookTime {
+  recipeId: string;
+  userId: string;
+  userName: string | null;
+  minutes: number; // how long this person says the dish takes
+}
+
 export interface CookLogEntry {
   id: string;
   recipeId: string;

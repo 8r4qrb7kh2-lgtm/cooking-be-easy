@@ -10,6 +10,7 @@ import { markRecipeViewed } from "@/lib/recentViews";
 import IngredientEditor, { IngredientEditorMeta } from "@/components/IngredientEditor";
 import StepEditor from "@/components/StepEditor";
 import RecipeRatingPanel from "@/components/RecipeRatingPanel";
+import RecipeCookTimePanel from "@/components/RecipeCookTimePanel";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -534,6 +535,8 @@ export default function RecipeDetailPage() {
         <h2 className="font-semibold text-gray-900">Recipe Profile</h2>
 
         <RecipeRatingPanel recipeId={recipe.id} onAverageChange={handleAverageChange} />
+
+        <RecipeCookTimePanel recipeId={recipe.id} />
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">

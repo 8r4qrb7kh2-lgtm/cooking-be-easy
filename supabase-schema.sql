@@ -66,6 +66,18 @@ create table recipe_ratings (
 );
 alter table recipe_ratings enable row level security;
 
+-- Per-user cook times in minutes; the app shows the average across reporters
+create table recipe_cook_times (
+  recipe_id text not null,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  household_id uuid references households(id),
+  minutes int not null check (minutes between 1 and 1440),
+  user_name text,
+  updated_at timestamptz not null default now(),
+  primary key (recipe_id, user_id)
+);
+alter table recipe_cook_times enable row level security;
+
 -- Cook logs: a dish was made on a day (source of "days since last made")
 create table recipe_cook_logs (
   id uuid primary key default gen_random_uuid(),
@@ -79,7 +91,8 @@ create table recipe_cook_logs (
 alter table recipe_cook_logs enable row level security;
 
 -- Rating prompts: which post-cook "how was it?" prompts a user has handled
--- (rated or dismissed), so each dish is asked about at most once per cook.
+-- (rated or dismissed). Reads collapse to the recipe, so a dish is asked about
+-- once per user ever, however long after it was cooked.
 -- Per-user (personal, not household) so it syncs across the user's devices.
 create table recipe_rating_prompts (
   user_id uuid references auth.users(id) on delete cascade not null,
@@ -183,6 +196,13 @@ create policy "Users manage own or household plans" on weekly_plans for all
 
 -- Recipe ratings: own or same household
 create policy "Users manage own or household ratings" on recipe_ratings for all
+  using (
+    auth.uid() = user_id
+    OR household_id IN (select household_id from household_members where user_id = auth.uid())
+  );
+
+-- Cook times: own or same household
+create policy "Users manage own or household cook times" on recipe_cook_times for all
   using (
     auth.uid() = user_id
     OR household_id IN (select household_id from household_members where user_id = auth.uid())

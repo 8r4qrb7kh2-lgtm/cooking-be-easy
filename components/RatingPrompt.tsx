@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Star, X } from "lucide-react";
+import { Clock, Loader2, Star, X } from "lucide-react";
 import { useAuth } from "./AuthProvider";
 import StarRow from "./StarRow";
+import CookTimeSlider from "./CookTimeSlider";
 import { getCookLogs } from "@/lib/cookLog";
 import { getRecipe } from "@/lib/storage";
 import {
@@ -12,6 +13,12 @@ import {
   getRatingsForRecipe,
   saveMyRating,
 } from "@/lib/ratings";
+import {
+  DEFAULT_COOK_MINUTES,
+  formatCookTime,
+  getCookTimesForRecipe,
+  saveMyCookTime,
+} from "@/lib/cookTimes";
 import { daysBetweenKeys, todayKey } from "@/lib/mealPlan";
 import {
   getHandledRecipeIds,
@@ -23,25 +30,31 @@ interface RatingCandidate {
   cookedOn: string;
 }
 
-// Global "How was it?" prompt. When a user opens the app 1–2 days after they
-// logged cooking a dish, this asks them to rate it — once per dish, ever. Mounted
-// in the layout so it surfaces over whatever page they land on.
+// Global "How was it?" prompt. Any dish the user logged cooking at least a day
+// ago — however long ago that was — gets asked about the next time they open the
+// app: how it tasted, and how long it took. Once per dish, ever. Mounted in the
+// layout so it surfaces over whatever page they land on.
 export default function RatingPrompt() {
   const { user } = useAuth();
   const userId = user?.id ?? null;
   const userName = getDisplayName(user);
 
   const [queue, setQueue] = useState<RatingCandidate[]>([]);
-  // The loaded name + existing rating, tagged with the recipe they belong to so
-  // the modal only renders once THIS dish's data is in (never a prior dish's).
+  // The loaded name + this user's existing rating/cook time, tagged with the
+  // recipe they belong to so the modal only renders once THIS dish's data is in
+  // (never a prior dish's).
   const [loaded, setLoaded] = useState<{
     recipeId: string;
     name: string;
     existingRating: number;
+    existingMinutes: number | null;
   } | null>(null);
   // The stars the user has tapped for the active dish. Nothing is written until
   // they hit Apply, so a misclick can be corrected first. Reset per dish.
   const [selected, setSelected] = useState(0);
+  // How long they say it took. Pre-filled (their previous answer, or the default)
+  // and written alongside the rating on Apply.
+  const [minutes, setMinutes] = useState(DEFAULT_COOK_MINUTES);
   const [saving, setSaving] = useState(false);
 
   // Recipe IDs this user has already dealt with — prompted about before (rated or
@@ -53,11 +66,12 @@ export default function RatingPrompt() {
 
   const current = queue[0] ?? null;
 
-  // Gather the dishes this user cooked 1–2 days ago that they haven't already
-  // rated or been asked to rate (anything older than 2 days is skipped). Re-runs
-  // when the app regains focus — todayKey() is re-read each time — so a PWA
-  // reopened the next day still prompts without a hard reload. Never clobbers a
-  // prompt the user is already partway through answering.
+  // Gather every dish this user cooked at least a day ago that they haven't
+  // already rated or been asked to rate — there's no cutoff, so a dish made
+  // months back is still asked about the first time it comes up. Re-runs when the
+  // app regains focus — todayKey() is re-read each time — so a PWA reopened the
+  // next day still prompts without a hard reload. Never clobbers a prompt the
+  // user is already partway through answering.
   useEffect(() => {
     if (!userId) {
       setQueue([]);
@@ -82,12 +96,14 @@ export default function RatingPrompt() {
         const today = todayKey();
         const seen = new Set<string>();
         const candidates: RatingCandidate[] = [];
+        // Newest cook first: ask about what's freshest in memory, and when a dish
+        // was made several times, label it with the most recent one.
         const mine = logs
           .filter((log) => log.userId === uid)
-          .sort((a, b) => a.cookedOn.localeCompare(b.cookedOn));
+          .sort((a, b) => b.cookedOn.localeCompare(a.cookedOn));
         for (const log of mine) {
           const daysAgo = daysBetweenKeys(log.cookedOn, today);
-          if (daysAgo !== 1 && daysAgo !== 2) continue;
+          if (daysAgo < 1) continue;
           if (handledRef.current.has(log.recipeId)) continue;
           if (seen.has(log.recipeId)) continue;
           seen.add(log.recipeId);
@@ -116,18 +132,19 @@ export default function RatingPrompt() {
     };
   }, [userId]);
 
-  // Load the recipe name + this user's existing rating for the active dish. The
-  // result is tagged with current.recipeId; the render gate below only shows the
-  // modal when that tag matches, so a tap can never land on the wrong dish while
-  // the next one is still loading.
+  // Load the recipe name + this user's existing rating and cook time for the
+  // active dish. The result is tagged with current.recipeId; the render gate
+  // below only shows the modal when that tag matches, so a tap can never land on
+  // the wrong dish while the next one is still loading.
   useEffect(() => {
     if (!current || !userId) return;
     let cancelled = false;
     Promise.all([
       getRecipe(current.recipeId),
       getRatingsForRecipe(current.recipeId),
+      getCookTimesForRecipe(current.recipeId),
     ])
-      .then(([recipe, ratings]) => {
+      .then(([recipe, ratings, cookTimes]) => {
         if (cancelled) return;
         if (!recipe) {
           // Recipe was deleted — drop it and move to the next candidate.
@@ -139,6 +156,9 @@ export default function RatingPrompt() {
           name: recipe.name,
           existingRating:
             ratings.find((rating) => rating.userId === userId)?.rating ?? 0,
+          existingMinutes:
+            cookTimes.find((cookTime) => cookTime.userId === userId)?.minutes ??
+            null,
         });
       })
       .catch(() => {
@@ -149,11 +169,12 @@ export default function RatingPrompt() {
     };
   }, [current?.recipeId, current?.cookedOn, userId]);
 
-  // Start each dish with a clean selection (or its existing rating, if any), so a
-  // choice carried over from the previous prompt can't be applied by accident.
+  // Start each dish with a clean selection (or its existing answers, if any), so
+  // a choice carried over from the previous prompt can't be applied by accident.
   useEffect(() => {
     setSelected(loaded?.existingRating ?? 0);
-  }, [loaded?.recipeId, loaded?.existingRating]);
+    setMinutes(loaded?.existingMinutes ?? DEFAULT_COOK_MINUTES);
+  }, [loaded?.recipeId, loaded?.existingRating, loaded?.existingMinutes]);
 
   // Marks the dish as handled so it isn't asked about again, then advances.
   // The in-memory set is updated synchronously so a focus refresh can't re-add
@@ -161,22 +182,27 @@ export default function RatingPrompt() {
   function finish() {
     if (current) {
       handledRef.current.add(current.recipeId);
-      void markRecipeRatingHandled(current.recipeId).catch(() => {});
+      void markRecipeRatingHandled(current.recipeId, current.cookedOn).catch(
+        () => {}
+      );
     }
     setQueue((q) => q.slice(1));
   }
 
-  // Commit the stars the user settled on. Only reachable once they've picked at
-  // least one star and pressed Apply.
+  // Commit the stars and the cook time the user settled on. Only reachable once
+  // they've picked at least one star and pressed Apply.
   async function apply() {
     if (!current || !userId || saving || selected === 0) return;
     setSaving(true);
     try {
-      await saveMyRating({
-        recipeId: current.recipeId,
-        userName,
-        rating: selected,
-      });
+      await Promise.all([
+        saveMyRating({
+          recipeId: current.recipeId,
+          userName,
+          rating: selected,
+        }),
+        saveMyCookTime({ recipeId: current.recipeId, userName, minutes }),
+      ]);
     } catch {
       // Even if saving fails we close so the user isn't nagged repeatedly.
     } finally {
@@ -227,6 +253,27 @@ export default function RatingPrompt() {
             ? `${selected} star${selected === 1 ? "" : "s"} selected`
             : " "}
         </p>
+
+        <div className="mt-4 border-t border-gray-100 pt-4">
+          <div className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1.5 text-sm text-gray-500">
+              <Clock size={14} className="text-gray-400" />
+              How long did it take?
+            </span>
+            <span className="text-sm font-semibold text-gray-800">
+              {formatCookTime(minutes)}
+            </span>
+          </div>
+          <div className="mt-2">
+            <CookTimeSlider
+              minutes={minutes}
+              onChange={setMinutes}
+              disabled={saving}
+              label="How long the dish took to cook"
+            />
+          </div>
+        </div>
+
         <div className="mt-4 flex items-center justify-between">
           <button
             type="button"
@@ -256,7 +303,13 @@ export default function RatingPrompt() {
   );
 }
 
+// Now that dishes are asked about however long after they were cooked, the label
+// coarsens as it goes back — "83 days ago" reads worse than "3 months ago".
 function daysAgoLabel(cookedOn: string): string {
   const daysAgo = daysBetweenKeys(cookedOn, todayKey());
-  return daysAgo === 1 ? "yesterday" : `${daysAgo} days ago`;
+  if (daysAgo === 1) return "yesterday";
+  if (daysAgo < 14) return `${daysAgo} days ago`;
+  if (daysAgo < 60) return `${Math.round(daysAgo / 7)} weeks ago`;
+  if (daysAgo < 365) return `${Math.round(daysAgo / 30)} months ago`;
+  return "over a year ago";
 }

@@ -1,4 +1,4 @@
-import { addDaysToKey, todayKey } from "./mealPlan";
+import { todayKey } from "./mealPlan";
 import { getSupabase } from "./supabase";
 
 // Tracks which post-cook "how was it?" rating prompts a user has already handled,
@@ -32,22 +32,19 @@ export async function getHandledRecipeIds(): Promise<Set<string>> {
 }
 
 // Records that the user has dealt with (rated or dismissed) this recipe's prompt
-// so it's never asked about again. Writes the current 1–2 day window; since reads
-// collapse to the recipe, any one row is enough to suppress future prompts.
-// Idempotent via the primary key.
-export async function markRecipeRatingHandled(recipeId: string): Promise<void> {
+// so it's never asked about again. One row is enough — reads collapse to the
+// recipe — so this records which cook it was asked about (falling back to today
+// when the date isn't known). Idempotent via the primary key.
+export async function markRecipeRatingHandled(
+  recipeId: string,
+  cookedOn?: string
+): Promise<void> {
   const userId = await getUserId();
   if (!userId) return;
-  const today = todayKey();
-  const rows = [addDaysToKey(today, -1), addDaysToKey(today, -2)].map(
-    (cooked_on) => ({ user_id: userId, recipe_id: recipeId, cooked_on })
-  );
   const supabase = getSupabase();
-  const { error } = await supabase
-    .from("recipe_rating_prompts")
-    .upsert(rows, {
-      onConflict: "user_id,recipe_id,cooked_on",
-      ignoreDuplicates: true,
-    });
+  const { error } = await supabase.from("recipe_rating_prompts").upsert(
+    { user_id: userId, recipe_id: recipeId, cooked_on: cookedOn ?? todayKey() },
+    { onConflict: "user_id,recipe_id,cooked_on", ignoreDuplicates: true }
+  );
   if (error) throw error;
 }

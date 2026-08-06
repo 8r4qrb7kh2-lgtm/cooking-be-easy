@@ -8,6 +8,7 @@ import {
   MealSlot,
   MEAL_SLOTS,
   Recipe,
+  RecipeCookTime,
   RecipeRating,
 } from "@/lib/types";
 import {
@@ -18,6 +19,14 @@ import {
   setWeeklyPlanIds,
 } from "@/lib/storage";
 import { getCookLogs } from "@/lib/cookLog";
+import {
+  averageCookMinutesByRecipeId,
+  buildCookTimeScale,
+  cookTimeChipStyle,
+  cookTimeHue,
+  formatCookTime,
+  getRecipeCookTimes,
+} from "@/lib/cookTimes";
 import { averageRating, getDisplayName, getRecipeRatings } from "@/lib/ratings";
 import { buildPreservedShoppingList } from "@/lib/utils";
 import { useAuth } from "@/components/AuthProvider";
@@ -275,6 +284,7 @@ export default function PlannerPage() {
   const [entries, setEntries] = useState<MealPlanEntry[]>([]);
   const [cookLogs, setCookLogs] = useState<CookLogEntry[]>([]);
   const [ratings, setRatings] = useState<RecipeRating[]>([]);
+  const [cookTimes, setCookTimes] = useState<RecipeCookTime[]>([]);
   const [planLoadFailed, setPlanLoadFailed] = useState(false);
   const [weekStartKey, setWeekStartKey] = useState(() => startOfWeekKey(todayKey()));
   const [addingToShopping, setAddingToShopping] = useState(false);
@@ -312,19 +322,26 @@ export default function PlannerPage() {
     let mounted = true;
 
     async function load() {
-      const [recipesResult, entriesResult, cookLogsResult, ratingsResult] =
-        await Promise.allSettled([
-          getRecipes(),
-          getMealPlanEntries(),
-          getCookLogs(),
-          getRecipeRatings(),
-        ]);
+      const [
+        recipesResult,
+        entriesResult,
+        cookLogsResult,
+        ratingsResult,
+        cookTimesResult,
+      ] = await Promise.allSettled([
+        getRecipes(),
+        getMealPlanEntries(),
+        getCookLogs(),
+        getRecipeRatings(),
+        getRecipeCookTimes(),
+      ]);
 
       if (!mounted) return;
 
       if (recipesResult.status === "fulfilled") setRecipes(recipesResult.value);
       if (cookLogsResult.status === "fulfilled") setCookLogs(cookLogsResult.value);
       if (ratingsResult.status === "fulfilled") setRatings(ratingsResult.value);
+      if (cookTimesResult.status === "fulfilled") setCookTimes(cookTimesResult.value);
       if (entriesResult.status === "fulfilled") {
         setEntries(entriesResult.value);
       } else {
@@ -410,6 +427,12 @@ export default function PlannerPage() {
     }
     return map;
   }, [ratings]);
+
+  // How long each dish takes, averaged across everyone who reported a time.
+  const cookMinutesByRecipeId = useMemo(
+    () => averageCookMinutesByRecipeId(cookTimes),
+    [cookTimes]
+  );
 
   // Options for the plot's rating source: the household average, then each
   // distinct rater (current user always available, even before they've rated).
@@ -572,11 +595,27 @@ export default function PlannerPage() {
         recipe,
         xPct: clamp(rawX + dx, 2, 98),
         topPct: clamp(rawTop + dy, 4, 96),
+        cookMinutes: cookMinutesByRecipeId.get(recipe.id) ?? null,
       };
     });
 
-    return { xAxis, yAxis, points, hiddenUnratedCount };
-  }, [poolRecipes, plannedThisWeekIds, metricsByRecipeId, xAxisId, yAxisId]);
+    // Scaled to the dishes actually on the plot, so the green→red fill stays
+    // meaningful as the pool is filtered.
+    const cookTimeScale = buildCookTimeScale(
+      points
+        .map((point) => point.cookMinutes)
+        .filter((minutes): minutes is number => minutes !== null)
+    );
+
+    return { xAxis, yAxis, points, hiddenUnratedCount, cookTimeScale };
+  }, [
+    poolRecipes,
+    plannedThisWeekIds,
+    metricsByRecipeId,
+    cookMinutesByRecipeId,
+    xAxisId,
+    yAxisId,
+  ]);
 
   const manualPickerRecipes = useMemo(() => {
     const query = manualQuery.trim().toLowerCase();
@@ -785,7 +824,7 @@ export default function PlannerPage() {
   const isCurrentWeek = weekStartKey === startOfWeekKey(today);
   const draggedRecipe = dragView?.active ? recipesById[dragView.recipeId] : undefined;
   const pendingRecipe = pendingPlace ? recipesById[pendingPlace.recipeId] : undefined;
-  const { xAxis, yAxis, points, hiddenUnratedCount } = plotLayout;
+  const { xAxis, yAxis, points, hiddenUnratedCount, cookTimeScale } = plotLayout;
   // How many pool recipes are off the chart purely because they're planned this
   // week — used to explain an empty plot when everything is already scheduled.
   const plannedFromPoolCount = poolRecipes.filter((recipe) =>
@@ -1275,6 +1314,23 @@ export default function PlannerPage() {
           </label>
         )}
 
+        {cookTimeScale && (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+            <span className="font-medium">Cook time</span>
+            <span className="text-gray-400">{formatCookTime(cookTimeScale.min)}</span>
+            <span
+              className="h-2 w-20 rounded-full"
+              style={{
+                background: `linear-gradient(to right, ${cookTimeChipStyle(140).borderColor}, ${
+                  cookTimeChipStyle(70).borderColor
+                }, ${cookTimeChipStyle(0).borderColor})`,
+              }}
+            />
+            <span className="text-gray-400">{formatCookTime(cookTimeScale.max)}</span>
+            <span className="text-gray-400">· hover a dish for its time</span>
+          </div>
+        )}
+
         {hiddenUnratedCount > 0 && points.length > 0 && (
           <p className="text-xs text-gray-400">
             {hiddenUnratedCount} unrated recipe{hiddenUnratedCount === 1 ? "" : "s"} not
@@ -1365,7 +1421,7 @@ export default function PlannerPage() {
               )}
 
               {/* Recipe chips — name + thumbnail only */}
-              {points.map(({ recipe, xPct, topPct }) => {
+              {points.map(({ recipe, xPct, topPct, cookMinutes }) => {
                 // Center chips on their point, but anchor ones near the plot
                 // edges inward so overflow-hidden doesn't clip their labels
                 const anchorX =
@@ -1379,6 +1435,26 @@ export default function PlannerPage() {
                   dragView.entryId === null &&
                   dragView.recipeId === recipe.id;
                 const thumbnail = recipe.dishPhotos[0];
+                // Fill by cook time; dishes nobody has timed keep the plain white
+                // chip. A selected chip keeps its brand border as the cue.
+                const chipColors =
+                  cookMinutes !== null && cookTimeScale
+                    ? cookTimeChipStyle(cookTimeHue(cookMinutes, cookTimeScale))
+                    : null;
+                const chipFill = chipColors
+                  ? {
+                      background: chipColors.background,
+                      ...(isSelected ? {} : { borderColor: chipColors.borderColor }),
+                    }
+                  : {};
+                // Keep the tooltip inside the clipped plot area: below the chip
+                // when it sits near the top, and aligned to whichever edge the
+                // chip itself is anchored to.
+                const tooltipPlacement = `${
+                  topPct < 14 ? "top-full mt-1" : "bottom-full mb-1"
+                } ${
+                  xPct < 12 ? "left-0" : xPct > 88 ? "right-0" : "left-1/2 -translate-x-1/2"
+                }`;
 
                 return (
                   <button
@@ -1393,13 +1469,23 @@ export default function PlannerPage() {
                     }
                     onPointerCancel={handleChipPointerCancel}
                     onContextMenu={(event) => event.preventDefault()}
-                    className={`absolute flex max-w-[168px] ${anchorX} -translate-y-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border bg-white py-1 pl-1 pr-2.5 text-xs leading-none shadow-sm cursor-grab touch-none select-none transition-shadow hover:shadow-md hover:z-20 ${
+                    className={`group absolute flex max-w-[168px] ${anchorX} -translate-y-1/2 items-center gap-1.5 whitespace-nowrap rounded-full border bg-white py-1 pl-1 pr-2.5 text-xs leading-none shadow-sm cursor-grab touch-none select-none transition-shadow hover:shadow-md hover:z-20 ${
                       isSelected
                         ? "border-brand-500 ring-2 ring-brand-300 z-20"
                         : "border-gray-200"
                     } ${isBeingDragged ? "opacity-40" : ""}`}
-                    style={{ left: `${xPct}%`, top: `${topPct}%` }}
+                    style={{ left: `${xPct}%`, top: `${topPct}%`, ...chipFill }}
                   >
+                    <span
+                      className={`pointer-events-none absolute z-30 w-max max-w-[180px] whitespace-normal rounded-lg bg-gray-900/95 px-2 py-1 text-left text-[10px] leading-snug text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 ${tooltipPlacement}`}
+                    >
+                      <span className="block font-semibold">
+                        {cookMinutes === null
+                          ? "No cook time yet"
+                          : formatCookTime(cookMinutes)}
+                      </span>
+                      <span className="block text-gray-300">{recipe.name}</span>
+                    </span>
                     {thumbnail ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
