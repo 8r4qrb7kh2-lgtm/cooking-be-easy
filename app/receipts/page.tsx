@@ -9,10 +9,15 @@ import {
   Calendar,
   Trash2,
   Search,
+  LineChart,
+  List,
 } from "lucide-react";
 import { Receipt } from "@/lib/types";
 import { getReceipts, deleteReceipt } from "@/lib/receiptsStorage";
 import PageLoadingScreen from "@/components/PageLoadingScreen";
+import PriceTrendPanel from "@/components/PriceTrendPanel";
+
+type ReceiptsTab = "receipts" | "graph";
 
 function formatCurrency(value: number | undefined, code = "USD"): string {
   if (value === undefined || !Number.isFinite(value)) return "";
@@ -37,6 +42,7 @@ export default function ReceiptsPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [tab, setTab] = useState<ReceiptsTab>("receipts");
 
   useEffect(() => {
     let mounted = true;
@@ -133,7 +139,31 @@ export default function ReceiptsPage() {
         </div>
       )}
 
-      {receipts.length > 0 && (
+      {!loading && receipts.length > 0 && (
+        <div className="mb-5 inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
+          {(
+            [
+              { value: "receipts", label: "Receipts", icon: List },
+              { value: "graph", label: "Price graph", icon: LineChart },
+            ] as const
+          ).map(({ value, label, icon: Icon }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setTab(value)}
+              aria-pressed={tab === value}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                tab === value ? "bg-brand-600 text-white" : "text-gray-600 hover:bg-gray-50"
+              }`}
+            >
+              <Icon size={14} />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {receipts.length > 0 && tab === "receipts" && (
         <label className="relative mb-5 block">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
@@ -147,6 +177,8 @@ export default function ReceiptsPage() {
 
       {loading ? (
         <PageLoadingScreen />
+      ) : tab === "graph" ? (
+        <PriceTrendPanel receipts={receipts} />
       ) : receipts.length === 0 ? (
         <div className="text-center py-20">
           <ReceiptIcon size={48} className="mx-auto text-gray-300 mb-4" />
