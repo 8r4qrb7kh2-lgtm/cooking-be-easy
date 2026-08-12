@@ -41,3 +41,9 @@ next-env.d.ts
 
 # local claude code config
 .claude/
+
+# xcode — the generated project is committed, personal state and builds are not
+xcuserdata/
+*.xcworkspace/xcshareddata/
+ios/build/
+DerivedData/

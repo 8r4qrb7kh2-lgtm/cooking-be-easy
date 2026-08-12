@@ -12,6 +12,13 @@ A web app for managing recipes, planning weekly meals, and generating grocery li
   - Checklist mode to check off items while shopping
 - **Smart Merging** — Identical ingredients across recipes are combined intelligently
 
+## iPhone app
+
+There is a native iOS shell in [`ios/`](ios/) that puts the deployed app on your
+home screen, with Google sign-in through Safari and cooking timers as real local
+notifications. See [ios/README.md](ios/README.md) for how to build and install
+it.
+
 ## Deploy to Vercel
 
 ### 1. Get API keys

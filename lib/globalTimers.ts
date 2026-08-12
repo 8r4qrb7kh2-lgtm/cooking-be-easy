@@ -1,3 +1,5 @@
+import { syncNativeTimerNotifications } from "./native";
+
 export interface GlobalTimer {
   id: string;
   label: string;
@@ -79,6 +81,20 @@ function emitTimersChanged() {
 function writeTimers(timers: GlobalTimer[]) {
   if (!hasWindow()) return;
   window.localStorage.setItem(GLOBAL_TIMERS_STORAGE_KEY, JSON.stringify(timers));
+
+  // Every add, cancel and completion funnels through here, which makes it the
+  // one place the iOS app needs to hear about to keep its local notifications
+  // in step with the tray. It is a no-op everywhere else.
+  syncNativeTimerNotifications(
+    timers
+      .filter((timer) => !timer.completedAt)
+      .map((timer) => ({
+        id: timer.id,
+        label: timer.label,
+        fireAt: timer.endTime,
+      }))
+  );
+
   emitTimersChanged();
 }
 

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { User } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
 import { migrateLocalStorageToSupabase } from "@/lib/migrate";
+import { isNativeApp } from "@/lib/native";
 import { Loader2 } from "lucide-react";
 import GooseChefLogo from "./GooseChefLogo";
 
@@ -86,10 +87,23 @@ export default function AuthProvider({
   }, []);
 
   async function signInWithGoogle() {
+    // Inside the iOS shell the Google leg of the flow runs in a separate Safari
+    // session (Google rejects embedded web views), so the callback has to come
+    // back to the app instead of finishing server-side. See lib/native.ts.
+    const native = isNativeApp();
+    const callbackUrl = new URL(`${resolveOAuthRedirectOrigin()}/auth/callback`);
+    if (native) callbackUrl.searchParams.set("native", "1");
+
     // Preserve redirect path (e.g. invite URL) through OAuth flow
     const redirect = sessionStorage.getItem("redirectAfterLogin");
     if (redirect) {
-      document.cookie = `redirect_after_login=${redirect};path=/;max-age=600;samesite=lax`;
+      if (native) {
+        // That Safari session cannot see cookies we set here, so the
+        // destination travels in the URL.
+        callbackUrl.searchParams.set("next", redirect);
+      } else {
+        document.cookie = `redirect_after_login=${redirect};path=/;max-age=600;samesite=lax`;
+      }
       sessionStorage.removeItem("redirectAfterLogin");
     }
 
@@ -97,7 +111,7 @@ export default function AuthProvider({
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${resolveOAuthRedirectOrigin()}/auth/callback`,
+        redirectTo: callbackUrl.toString(),
       },
     });
   }

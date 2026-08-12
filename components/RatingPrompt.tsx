@@ -216,7 +216,7 @@ export default function RatingPrompt() {
   if (!current || loaded?.recipeId !== current.recipeId) return null;
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/40 px-4 pb-24 sm:pb-0">
+    <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/40 px-4 pb-[calc(6rem_+_env(safe-area-inset-bottom))] sm:pb-0">
       <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2 text-amber-500">
