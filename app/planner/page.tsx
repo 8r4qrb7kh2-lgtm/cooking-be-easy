@@ -331,6 +331,7 @@ export default function PlannerPage() {
   const [manualPickerOpen, setManualPickerOpen] = useState(false);
   const [manualQuery, setManualQuery] = useState("");
   const manualPickerRef = useRef<HTMLDivElement | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Drag state lives in a ref (pointer handlers need the latest value without
   // re-render races); dragView mirrors it for rendering the ghost/highlights.
@@ -704,6 +705,17 @@ export default function PlannerPage() {
       a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
     );
   }, [recipes, manualQuery]);
+
+  // Whole-library search, independent of the pool — drag or tap a result
+  // straight into a slot without changing pool filters or manual picks.
+  const searchResults = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return [];
+    return recipes
+      .filter((recipe) => recipe.name.toLowerCase().includes(query))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+      .slice(0, 24);
+  }, [recipes, searchQuery]);
 
   // --- Plan mutations (optimistic; writes mirror the rest of the app) ---
 
@@ -1251,6 +1263,101 @@ export default function PlannerPage() {
             );
           })}
         </div>
+      </section>
+
+      {/* Recipe search — search the whole library, independent of pool filters
+          or manual picks, and drag/tap a result straight into a slot */}
+      <section className="bg-white rounded-xl border border-gray-200 p-3 sm:p-4 space-y-3">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900">Search recipes</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Search your whole library — drag a result onto a slot, or tap it and then
+            tap a slot.
+          </p>
+        </div>
+
+        <label className="relative block">
+          <Search
+            size={16}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+          />
+          <input
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search recipes by name"
+            className="w-full h-10 pl-9 pr-9 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+              aria-label="Clear search"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </label>
+
+        {searchQuery.trim() &&
+          (searchResults.length === 0 ? (
+            <p className="text-xs text-gray-400">
+              No recipes match &ldquo;{searchQuery.trim()}&rdquo;.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {searchResults.map((recipe) => {
+                const isSelected =
+                  pendingPlace !== null &&
+                  pendingPlace.entryId === null &&
+                  pendingPlace.recipeId === recipe.id;
+                const isBeingDragged =
+                  dragView?.active &&
+                  dragView.entryId === null &&
+                  dragView.recipeId === recipe.id;
+                const thumbnail = recipe.dishPhotos[0];
+
+                return (
+                  <button
+                    key={recipe.id}
+                    type="button"
+                    onPointerDown={(event) =>
+                      beginChipDrag(event, { recipeId: recipe.id, entryId: null })
+                    }
+                    onPointerMove={handleChipPointerMove}
+                    onPointerUp={(event) =>
+                      handleChipPointerUp(event, { recipeId: recipe.id, entryId: null })
+                    }
+                    onPointerCancel={handleChipPointerCancel}
+                    onContextMenu={(event) => event.preventDefault()}
+                    title={recipe.name}
+                    className={`flex max-w-[200px] items-center gap-1.5 whitespace-nowrap rounded-full border bg-white py-1 pl-1 pr-2.5 text-xs leading-none shadow-sm cursor-grab touch-none select-none transition-shadow hover:shadow-md ${
+                      isSelected
+                        ? "border-brand-500 ring-2 ring-brand-300"
+                        : "border-gray-200"
+                    } ${isBeingDragged ? "opacity-40" : ""}`}
+                  >
+                    {thumbnail ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={thumbnail}
+                        alt=""
+                        draggable={false}
+                        className="h-6 w-6 shrink-0 rounded-full object-cover"
+                      />
+                    ) : (
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gray-100">
+                        <ImageIcon size={12} className="text-gray-300" />
+                      </span>
+                    )}
+                    <span className="max-w-[150px] truncate font-medium text-gray-800">
+                      {recipe.name}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
       </section>
 
       {/* Recipe pool */}
