@@ -19,6 +19,7 @@ import {
   getCookTimesForRecipe,
   saveMyCookTime,
 } from "@/lib/cookTimes";
+import { estimateCookMinutes } from "@/lib/cookingSessions";
 import { daysBetweenKeys, todayKey } from "@/lib/mealPlan";
 import {
   getHandledRecipeIds,
@@ -48,12 +49,16 @@ export default function RatingPrompt() {
     name: string;
     existingRating: number;
     existingMinutes: number | null;
+    // What cooking mode clocked for this dish on the day it was cooked — the
+    // slider's starting point when the user hasn't reported a time themselves.
+    estimatedMinutes: number | null;
   } | null>(null);
   // The stars the user has tapped for the active dish. Nothing is written until
   // they hit Apply, so a misclick can be corrected first. Reset per dish.
   const [selected, setSelected] = useState(0);
-  // How long they say it took. Pre-filled (their previous answer, or the default)
-  // and written alongside the rating on Apply.
+  // How long they say it took. Pre-filled — their previous answer, else what
+  // cooking mode measured, else the default — and written alongside the rating
+  // on Apply.
   const [minutes, setMinutes] = useState(DEFAULT_COOK_MINUTES);
   const [saving, setSaving] = useState(false);
 
@@ -133,9 +138,10 @@ export default function RatingPrompt() {
   }, [userId]);
 
   // Load the recipe name + this user's existing rating and cook time for the
-  // active dish. The result is tagged with current.recipeId; the render gate
-  // below only shows the modal when that tag matches, so a tap can never land on
-  // the wrong dish while the next one is still loading.
+  // active dish, along with what cooking mode clocked on the day it was cooked.
+  // The result is tagged with current.recipeId; the render gate below only shows
+  // the modal when that tag matches, so a tap can never land on the wrong dish
+  // while the next one is still loading.
   useEffect(() => {
     if (!current || !userId) return;
     let cancelled = false;
@@ -143,8 +149,11 @@ export default function RatingPrompt() {
       getRecipe(current.recipeId),
       getRatingsForRecipe(current.recipeId),
       getCookTimesForRecipe(current.recipeId),
+      // Only a nicety — if it can't be worked out, the slider just starts at the
+      // default rather than holding up the prompt.
+      estimateCookMinutes(current.recipeId, current.cookedOn).catch(() => null),
     ])
-      .then(([recipe, ratings, cookTimes]) => {
+      .then(([recipe, ratings, cookTimes, estimatedMinutes]) => {
         if (cancelled) return;
         if (!recipe) {
           // Recipe was deleted — drop it and move to the next candidate.
@@ -159,6 +168,7 @@ export default function RatingPrompt() {
           existingMinutes:
             cookTimes.find((cookTime) => cookTime.userId === userId)?.minutes ??
             null,
+          estimatedMinutes,
         });
       })
       .catch(() => {
@@ -171,10 +181,19 @@ export default function RatingPrompt() {
 
   // Start each dish with a clean selection (or its existing answers, if any), so
   // a choice carried over from the previous prompt can't be applied by accident.
+  // The cook time starts on whatever's most likely right: a time the user
+  // reported before beats the measured one, which beats the bare default.
   useEffect(() => {
     setSelected(loaded?.existingRating ?? 0);
-    setMinutes(loaded?.existingMinutes ?? DEFAULT_COOK_MINUTES);
-  }, [loaded?.recipeId, loaded?.existingRating, loaded?.existingMinutes]);
+    setMinutes(
+      loaded?.existingMinutes ?? loaded?.estimatedMinutes ?? DEFAULT_COOK_MINUTES
+    );
+  }, [
+    loaded?.recipeId,
+    loaded?.existingRating,
+    loaded?.existingMinutes,
+    loaded?.estimatedMinutes,
+  ]);
 
   // Marks the dish as handled so it isn't asked about again, then advances.
   // The in-memory set is updated synchronously so a focus refresh can't re-add
@@ -214,6 +233,13 @@ export default function RatingPrompt() {
   // Only render once the loaded data belongs to the current dish — this is what
   // prevents a stale name/stars (and a wrong-dish tap) during a queue advance.
   if (!current || loaded?.recipeId !== current.recipeId) return null;
+
+  // Say where the pre-filled time came from, but only while it's untouched: once
+  // the user drags the slider the number is theirs, not the app's guess.
+  const showingEstimate =
+    loaded.existingMinutes === null &&
+    loaded.estimatedMinutes !== null &&
+    minutes === loaded.estimatedMinutes;
 
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center bg-black/40 px-4 pb-[calc(6rem_+_env(safe-area-inset-bottom))] sm:pb-0">
@@ -272,6 +298,11 @@ export default function RatingPrompt() {
               label="How long the dish took to cook"
             />
           </div>
+          {showingEstimate && (
+            <p className="mt-1.5 text-[11px] text-gray-400">
+              Filled in from your time in cooking mode — drag to correct it.
+            </p>
+          )}
         </div>
 
         <div className="mt-4 flex items-center justify-between">

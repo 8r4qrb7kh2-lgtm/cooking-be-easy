@@ -15,6 +15,11 @@ import Link from "next/link";
 import { Ingredient, Recipe } from "@/lib/types";
 import { getRecipe } from "@/lib/storage";
 import { logCookedToday, wasCookedToday } from "@/lib/cookLog";
+import {
+  COOKING_SESSION_HEARTBEAT_MS,
+  startCookingSession,
+  touchCookingSession,
+} from "@/lib/cookingSessions";
 import { markRecipeViewed } from "@/lib/recentViews";
 import { extractTimerPresets } from "@/lib/globalTimers";
 import GlobalTimerTray, { SuggestedTimer } from "@/components/GlobalTimerTray";
@@ -234,6 +239,48 @@ export default function CookingModePage() {
       cancelled = true;
     };
   }, [id, router]);
+
+  // Time the visit so the post-cook rating prompt can fill in "how long did it
+  // take?" by itself. One session per visit: opened when this screen mounts,
+  // kept alive on a heartbeat, and closed out on the way to anywhere else —
+  // navigating away, backgrounding the app, or closing the tab. The heartbeat is
+  // what makes it reliable; a tab closed outright never runs the exit write.
+  useEffect(() => {
+    if (!recipe) return;
+    const recipeId = recipe.id;
+    let sessionId: string | null = null;
+    let leftCookingMode = false;
+
+    function markStillOpen() {
+      if (sessionId) void touchCookingSession(sessionId);
+    }
+
+    void startCookingSession(recipeId).then((id) => {
+      sessionId = id;
+      // Left before the row even landed — close it out now so the visit is
+      // still bounded by something.
+      if (leftCookingMode) markStillOpen();
+    });
+
+    const heartbeat = window.setInterval(() => {
+      if (document.visibilityState === "visible") markStillOpen();
+    }, COOKING_SESSION_HEARTBEAT_MS);
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") markStillOpen();
+    }
+
+    window.addEventListener("pagehide", markStillOpen);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      leftCookingMode = true;
+      window.clearInterval(heartbeat);
+      window.removeEventListener("pagehide", markStillOpen);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      markStillOpen();
+    };
+  }, [recipe?.id]);
 
   async function confirmCookedToday() {
     if (!recipe || cookLogState === "logging") return;

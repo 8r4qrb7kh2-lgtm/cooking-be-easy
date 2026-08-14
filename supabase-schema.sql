@@ -90,6 +90,20 @@ create table recipe_cook_logs (
 );
 alter table recipe_cook_logs enable row level security;
 
+-- Cooking mode sessions: one row per visit to a dish's cooking-mode screen
+-- (when it opened, when it was last still open). First open to last close on a
+-- cooked day is what pre-fills "how long did it take?" in the rating prompt.
+-- Per-user (personal, not household).
+create table cooking_mode_sessions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  recipe_id text not null,
+  cooked_on date not null,
+  started_at timestamptz not null default now(),
+  ended_at timestamptz not null default now()
+);
+alter table cooking_mode_sessions enable row level security;
+
 -- Rating prompts: which post-cook "how was it?" prompts a user has handled
 -- (rated or dismissed). Reads collapse to the recipe, so a dish is asked about
 -- once per user ever, however long after it was cooked.
@@ -216,6 +230,10 @@ create policy "Users manage own or household cook logs" on recipe_cook_logs for 
     auth.uid() = user_id
     OR household_id IN (select household_id from household_members where user_id = auth.uid())
   );
+
+-- Cooking mode sessions: personal, own rows only
+create policy "Users manage own cooking mode sessions" on cooking_mode_sessions for all
+  using (auth.uid() = user_id);
 
 -- Rating prompts: personal, own rows only
 create policy "Users manage own rating prompts" on recipe_rating_prompts for all
