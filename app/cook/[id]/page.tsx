@@ -23,6 +23,7 @@ import {
 import { markRecipeViewed } from "@/lib/recentViews";
 import { extractTimerPresets } from "@/lib/globalTimers";
 import GlobalTimerTray, { SuggestedTimer } from "@/components/GlobalTimerTray";
+import { formatStepUnits } from "@/components/StepUnits";
 import RecipeTableView from "@/components/RecipeTableView";
 import {
   buildIngredientMatchers,
@@ -31,7 +32,6 @@ import {
   formatIngredientCitationText,
   formatScaledQuantity,
   formatServingCount,
-  formatStepUnits,
   scaleQuantityValue,
   StepIngredientCitation,
 } from "@/lib/recipeSteps";

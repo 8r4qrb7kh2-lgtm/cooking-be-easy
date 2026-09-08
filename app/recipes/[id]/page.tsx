@@ -1,6 +1,6 @@
 "use client";
 
-import { formatStepUnits } from "@/lib/recipeSteps";
+import { formatStepUnits } from "@/components/StepUnits";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { buildMyNetDiaryRecipeExport } from "@/lib/mynetdiary";

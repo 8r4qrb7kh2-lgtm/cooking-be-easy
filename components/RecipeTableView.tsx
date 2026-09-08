@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { formatStepUnits } from "@/lib/recipeSteps";
+import { formatStepUnits } from "@/components/StepUnits";
 import { Ingredient } from "@/lib/types";
 import {
   buildRecipeTable,
@@ -172,7 +172,7 @@ export default function RecipeTableView({
                     <button
                       type="button"
                       onClick={() => onSelectStep(prepRow.stepIndex)}
-                      title={formatStepUnits(prepRow.text)}
+                      title={prepRow.text}
                       className="block w-full px-3 py-2 text-left transition-colors hover:bg-brand-50 sm:text-center"
                     >
                       {/* These rows span the whole table, so their text would
@@ -208,7 +208,7 @@ export default function RecipeTableView({
                       <button
                         type="button"
                         onClick={() => onSelectStep(column.stepIndex)}
-                        title={formatStepUnits(column.text)}
+                        title={column.text}
                         className="block h-full w-full px-3 py-2 text-center transition-colors hover:bg-brand-50"
                       >
                         {formatStepUnits(column.label)}

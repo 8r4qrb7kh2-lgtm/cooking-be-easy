@@ -99,13 +99,6 @@ const GENERIC_TRAILING_INGREDIENT_WORDS = new Set([
   "sticks",
 ]);
 
-/** Add visual unit cues at render time, keeping saved amounts and citation offsets intact. */
-export function formatStepUnits(text: string): string {
-  return text.replace(/\b(tbsp|tsp)\b(?!\s*\((?:🍽️|🍵)\))/gi, (unit) =>
-    `${unit} (${unit.toLowerCase() === "tbsp" ? "🍽️" : "🍵"})`
-  );
-}
-
 export function normalizeRecipeStep(step: string): string {
   return step
     .replace(/\s+/g, " ")
