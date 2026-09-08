@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { formatStepUnits } from "@/lib/recipeSteps";
 import { Ingredient } from "@/lib/types";
 import {
   buildRecipeTable,
@@ -171,13 +172,13 @@ export default function RecipeTableView({
                     <button
                       type="button"
                       onClick={() => onSelectStep(prepRow.stepIndex)}
-                      title={prepRow.text}
+                      title={formatStepUnits(prepRow.text)}
                       className="block w-full px-3 py-2 text-left transition-colors hover:bg-brand-50 sm:text-center"
                     >
                       {/* These rows span the whole table, so their text would
                           scroll off with it — pin it beside the frozen column. */}
                       <span className="sticky left-3 inline-block">
-                        {prepRow.text}
+                        {formatStepUnits(prepRow.text)}
                       </span>
                     </button>
                   </td>
@@ -192,7 +193,7 @@ export default function RecipeTableView({
                     }`}
                     style={{ minWidth: "10.5rem" }}
                   >
-                    {formatRecipeTableIngredient(row.ingredient, quantityScale)}
+                    {formatStepUnits(formatRecipeTableIngredient(row.ingredient, quantityScale))}
                   </td>
 
                   {(columnsByStartRow.get(rowIndex) ?? []).map((column) => (
@@ -207,10 +208,10 @@ export default function RecipeTableView({
                       <button
                         type="button"
                         onClick={() => onSelectStep(column.stepIndex)}
-                        title={column.text}
+                        title={formatStepUnits(column.text)}
                         className="block h-full w-full px-3 py-2 text-center transition-colors hover:bg-brand-50"
                       >
-                        {column.label}
+                        {formatStepUnits(column.label)}
                       </button>
                     </td>
                   ))}

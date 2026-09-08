@@ -31,6 +31,7 @@ import {
   formatIngredientCitationText,
   formatScaledQuantity,
   formatServingCount,
+  formatStepUnits,
   scaleQuantityValue,
   StepIngredientCitation,
 } from "@/lib/recipeSteps";
@@ -624,7 +625,7 @@ export default function CookingModePage() {
       className: string
     ): ReactNode => {
       if (!stepText) return stepText;
-      if (citations.length === 0) return stepText;
+      if (citations.length === 0) return formatStepUnits(stepText);
 
       const output: ReactNode[] = [];
       let cursor = 0;
@@ -632,7 +633,7 @@ export default function CookingModePage() {
       for (let i = 0; i < citations.length; i++) {
         const citation = citations[i];
         if (citation.start > cursor) {
-          output.push(stepText.slice(cursor, citation.start));
+          output.push(formatStepUnits(stepText.slice(cursor, citation.start)));
         }
 
         output.push(
@@ -640,7 +641,7 @@ export default function CookingModePage() {
             key={`${citation.ingredientId}-${citation.start}-${citation.end}-${i}`}
             className={className}
           >
-            {formatIngredientCitationText(citation, ingredientById, quantityScale)}
+            {formatStepUnits(formatIngredientCitationText(citation, ingredientById, quantityScale))}
           </strong>
         );
 
@@ -648,7 +649,7 @@ export default function CookingModePage() {
       }
 
       if (cursor < stepText.length) {
-        output.push(stepText.slice(cursor));
+        output.push(formatStepUnits(stepText.slice(cursor)));
       }
 
       return output;
@@ -821,7 +822,7 @@ export default function CookingModePage() {
   function renderIngredientItem(ing: Ingredient, key: string, textClass: string) {
     const converted = conversions[ing.id];
     const isConverting = convertingId === ing.id;
-    const scaledAmount = formatIngredientAmount(ing, quantityScale);
+    const scaledAmount = formatStepUnits(formatIngredientAmount(ing, quantityScale));
 
     return (
       <li key={key} className="text-sm">
@@ -832,7 +833,7 @@ export default function CookingModePage() {
               {converted ? (
                 <>
                   <span className="font-medium">
-                    {converted.convertedQuantity} {converted.toUnit}
+                    {formatStepUnits(`${converted.convertedQuantity} ${converted.toUnit}`)}
                   </span>{" "}
                   {ing.name}
                   <button
@@ -843,7 +844,7 @@ export default function CookingModePage() {
                     <RotateCcw size={12} />
                   </button>
                   <span className="block text-xs text-gray-400 mt-0.5">
-                    was {converted.sourceQuantity} {ing.unit}
+                    was {formatStepUnits(`${converted.sourceQuantity} ${ing.unit}`)}
                   </span>
                 </>
               ) : (

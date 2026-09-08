@@ -1,5 +1,6 @@
 "use client";
 
+import { formatStepUnits } from "@/lib/recipeSteps";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { buildMyNetDiaryRecipeExport } from "@/lib/mynetdiary";
@@ -692,7 +693,7 @@ export default function RecipeDetailPage() {
                         {index + 1}
                       </span>
                       <p className="text-sm leading-relaxed text-gray-700">
-                        {sourceStep}
+                        {formatStepUnits(sourceStep)}
                       </p>
                     </div>
                   ))
