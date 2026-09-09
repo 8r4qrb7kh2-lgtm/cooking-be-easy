@@ -687,10 +687,10 @@ export default function ShoppingPage() {
                         ))}
 
                         {addingSection === section ? (
-                              <li className="px-4 py-2 flex gap-2 items-center bg-brand-50">
+                              <li className="px-4 py-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 items-center bg-brand-50 sm:flex">
                                 <input
                                   autoFocus
-                                  className="w-16 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
+                                  className="min-w-0 w-full sm:w-16 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
                                   value={newItem.quantity}
                                   onChange={(event) =>
                                     setNewItem({
@@ -701,7 +701,7 @@ export default function ShoppingPage() {
                                   placeholder="Qty"
                                 />
                                 <input
-                                  className="w-20 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
+                                  className="min-w-0 w-full sm:w-20 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
                                   value={newItem.unit}
                                   onChange={(event) =>
                                     setNewItem({
@@ -712,7 +712,7 @@ export default function ShoppingPage() {
                                   placeholder="Unit"
                                 />
                                 <input
-                                  className="flex-1 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
+                                  className="col-span-2 min-w-0 w-full text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white sm:flex-1"
                                   value={newItem.name}
                                   onChange={(event) =>
                                     setNewItem({
