@@ -3,12 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  GrocerySection,
-  GROCERY_SECTIONS,
-  Recipe,
-  ShoppingListItem,
-} from "@/lib/types";
+import { GROCERY_SECTIONS, Recipe, ShoppingListItem } from "@/lib/types";
 import {
   getRecipes,
   getShoppingList,
@@ -34,6 +29,8 @@ import {
   X,
 } from "lucide-react";
 
+const EXTRA_ITEMS_SECTION = "Extra Items";
+
 export default function ShoppingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -47,7 +44,7 @@ export default function ShoppingPage() {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBuf, setEditBuf] = useState({ quantity: "", unit: "", name: "" });
-  const [addingSection, setAddingSection] = useState<GrocerySection | null>(null);
+  const [addingExtraItem, setAddingExtraItem] = useState(false);
   const [newItem, setNewItem] = useState({ name: "", quantity: "", unit: "" });
   const [itemSearchQuery, setItemSearchQuery] = useState("");
   const [sortOption, setSortOption] = useState<RecipeSortOption>("recently-viewed");
@@ -147,7 +144,7 @@ export default function ShoppingPage() {
     setSelectedRecipeIds(nextIds);
     setItems(nextList);
     setEditingId(null);
-    setAddingSection(null);
+    setAddingExtraItem(false);
     await Promise.all([setWeeklyPlanIds(nextIds), saveShoppingList(nextList)]);
   }
 
@@ -182,7 +179,7 @@ export default function ShoppingPage() {
     setEditingId(null);
   }
 
-  function addItemToSection(section: GrocerySection) {
+  function addExtraItem() {
     if (!newItem.name.trim()) return;
 
     const item: ShoppingListItem = {
@@ -190,7 +187,7 @@ export default function ShoppingPage() {
       name: newItem.name.trim(),
       quantity: newItem.quantity,
       unit: newItem.unit,
-      section,
+      section: "Other",
       recipeIds: [],
       recipeNames: [],
       checked: false,
@@ -198,7 +195,7 @@ export default function ShoppingPage() {
 
     void persist([...items, item]);
     setNewItem({ name: "", quantity: "", unit: "" });
-    setAddingSection(null);
+    setAddingExtraItem(false);
   }
 
   function toggleSection(section: string) {
@@ -311,11 +308,127 @@ export default function ShoppingPage() {
     });
   }, [itemSearchQuery, items, recentViewsByRecipeId, recipesById, sortOption]);
 
-  const grouped = groupBySection(visibleItems);
+  const recipeVisibleItems = visibleItems.filter((item) => item.recipeIds.length > 0);
+  const extraVisibleItems = visibleItems.filter((item) => item.recipeIds.length === 0);
+  const grouped = groupBySection(recipeVisibleItems);
   const checkedCount = items.filter((item) => item.checked).length;
   const totalCount = items.length;
   const visibleCount = visibleItems.length;
   const activeSections = GROCERY_SECTIONS.filter((section) => grouped[section].length > 0);
+  const extraCheckedCount = extraVisibleItems.filter((item) => item.checked).length;
+
+  function renderItemRow(item: ShoppingListItem) {
+    return (
+      <li
+        key={item.id}
+        className={`px-4 py-3 flex items-center gap-3 transition-colors ${
+          item.checked ? "bg-gray-50" : ""
+        }`}
+      >
+        <button
+          onClick={() => toggleCheck(item.id)}
+          className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
+            item.checked
+              ? "bg-brand-500 border-brand-500"
+              : "border-gray-300 hover:border-brand-400"
+          }`}
+          aria-label={item.checked ? "Uncheck item" : "Check item"}
+        >
+          {item.checked && <Check size={13} className="text-white" />}
+        </button>
+
+        {editingId === item.id ? (
+          <div className="flex-1 flex gap-2 items-center">
+            <input
+              className="w-16 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
+              value={editBuf.quantity}
+              onChange={(event) =>
+                setEditBuf({
+                  ...editBuf,
+                  quantity: event.target.value,
+                })
+              }
+              placeholder="Qty"
+            />
+            <input
+              className="w-20 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
+              value={editBuf.unit}
+              onChange={(event) =>
+                setEditBuf({
+                  ...editBuf,
+                  unit: event.target.value,
+                })
+              }
+              placeholder="Unit"
+            />
+            <input
+              className="flex-1 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
+              value={editBuf.name}
+              onChange={(event) =>
+                setEditBuf({
+                  ...editBuf,
+                  name: event.target.value,
+                })
+              }
+              placeholder="Name"
+            />
+            <button
+              onClick={() => saveEdit(item.id)}
+              className="text-brand-600 hover:text-brand-700"
+            >
+              <Check size={16} />
+            </button>
+            <button
+              onClick={() => setEditingId(null)}
+              className="text-gray-400 hover:text-gray-600"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        ) : (
+          <div className={`flex-1 min-w-0 ${item.checked ? "opacity-50" : ""}`}>
+            <div className="flex items-baseline gap-1.5">
+              {(item.quantity || item.unit) && (
+                <span className="text-sm font-semibold text-brand-700 shrink-0">
+                  {item.quantity}
+                  {item.unit && ` ${item.unit}`}
+                </span>
+              )}
+              <span
+                className={`text-sm text-gray-800 ${
+                  item.checked ? "line-through" : ""
+                }`}
+              >
+                {item.name}
+              </span>
+            </div>
+            {item.recipeNames.length > 0 && (
+              <p className="text-xs text-gray-400 truncate">
+                {item.recipeNames.join(", ")}
+              </p>
+            )}
+          </div>
+        )}
+
+        {editingId !== item.id && (
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              onClick={() => startEdit(item)}
+              className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
+            >
+              <Edit2 size={14} />
+            </button>
+            <button
+              onClick={() => removeItem(item.id)}
+              className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        )}
+      </li>
+    );
+  }
 
   if (loading) {
     return <PageLoadingScreen />;
@@ -487,279 +600,208 @@ export default function ShoppingPage() {
         )}
       </section>
 
-      {items.length === 0 ? (
-        <div className="text-center py-16">
-          <ShoppingCart size={48} className="mx-auto text-gray-300 mb-4" />
-          <h2 className="text-lg font-semibold text-gray-500">No shopping list yet</h2>
+      {totalCount === 0 && (
+        <div className="text-center py-10">
+          <ShoppingCart size={40} className="mx-auto text-gray-300 mb-3" />
+          <h2 className="text-base font-semibold text-gray-500">No shopping list yet</h2>
           <p className="text-sm text-gray-400 mt-1">
-            Select recipes above and your list builds automatically.
+            Select recipes above, or add a one-off item in Extra Items below.
           </p>
         </div>
+      )}
+
+      {totalCount > 0 && (
+        <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+          <label className="relative">
+            <Search
+              size={16}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            />
+            <input
+              value={itemSearchQuery}
+              onChange={(event) => setItemSearchQuery(event.target.value)}
+              placeholder="Search shopping items"
+              className="w-full h-10 pl-9 pr-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+            />
+          </label>
+          <select
+            value={sortOption}
+            onChange={(event) =>
+              setSortOption(event.target.value as RecipeSortOption)
+            }
+            className="h-10 text-sm px-3 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
+            aria-label="Sort shopping items"
+          >
+            <option value="recently-viewed">Recently viewed</option>
+            <option value="rating-desc">Rating: high to low</option>
+          </select>
+        </div>
+      )}
+
+      {totalCount > 0 && (
+        <div className="bg-gray-100 rounded-full h-2 overflow-hidden">
+          <div
+            className="bg-brand-500 h-2 rounded-full transition-all"
+            style={{ width: `${(checkedCount / totalCount) * 100}%` }}
+          />
+        </div>
+      )}
+
+      {totalCount > 0 && visibleItems.length === 0 ? (
+        <div className="text-center py-14">
+          <h2 className="text-lg font-semibold text-gray-500">No matching items</h2>
+          <p className="text-sm text-gray-400 mt-1">Try a different search term.</p>
+        </div>
       ) : (
-        <>
-          <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-            <label className="relative">
-              <Search
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              />
-              <input
-                value={itemSearchQuery}
-                onChange={(event) => setItemSearchQuery(event.target.value)}
-                placeholder="Search shopping items"
-                className="w-full h-10 pl-9 pr-3 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
-              />
-            </label>
-            <select
-              value={sortOption}
-              onChange={(event) =>
-                setSortOption(event.target.value as RecipeSortOption)
-              }
-              className="h-10 text-sm px-3 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500"
-              aria-label="Sort shopping items"
-            >
-              <option value="recently-viewed">Recently viewed</option>
-              <option value="rating-desc">Rating: high to low</option>
-            </select>
-          </div>
+        <div className="space-y-4">
+          {activeSections.map((section) => {
+            const sectionItems = grouped[section];
+            const collapsed = collapsedSections.has(section);
+            const sectionChecked = sectionItems.filter((item) => item.checked).length;
 
-          {totalCount > 0 && (
-            <div className="bg-gray-100 rounded-full h-2 overflow-hidden">
+            return (
               <div
-                className="bg-brand-500 h-2 rounded-full transition-all"
-                style={{ width: `${(checkedCount / totalCount) * 100}%` }}
-              />
-            </div>
-          )}
-
-          {visibleItems.length === 0 ? (
-            <div className="text-center py-14">
-              <h2 className="text-lg font-semibold text-gray-500">No matching items</h2>
-              <p className="text-sm text-gray-400 mt-1">Try a different search term.</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {activeSections.map((section) => {
-                const sectionItems = grouped[section];
-                const collapsed = collapsedSections.has(section);
-                const sectionChecked = sectionItems.filter((item) => item.checked).length;
-
-                return (
-                  <div
-                    key={section}
-                    className="bg-white rounded-xl border border-gray-200 overflow-hidden"
-                  >
-                    <button
-                      className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
-                      onClick={() => toggleSection(section)}
-                    >
-                      <div className="flex items-center gap-2">
-                        {collapsed ? (
-                          <ChevronRight size={16} className="text-gray-400" />
-                        ) : (
-                          <ChevronDown size={16} className="text-gray-400" />
-                        )}
-                        <span className="font-semibold text-gray-800 text-sm">{section}</span>
-                        <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
-                          {sectionItems.length}
-                        </span>
-                      </div>
-                      {sectionChecked > 0 && (
-                        <span className="text-xs text-brand-600 font-medium">
-                          {sectionChecked}/{sectionItems.length}
-                        </span>
-                      )}
-                    </button>
-
-                    {!collapsed && (
-                      <ul className="divide-y divide-gray-50">
-                        {sectionItems.map((item) => (
-                          <li
-                            key={item.id}
-                            className={`px-4 py-3 flex items-center gap-3 transition-colors ${
-                              item.checked ? "bg-gray-50" : ""
-                            }`}
-                          >
-                            <button
-                              onClick={() => toggleCheck(item.id)}
-                              className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
-                                item.checked
-                                  ? "bg-brand-500 border-brand-500"
-                                  : "border-gray-300 hover:border-brand-400"
-                              }`}
-                              aria-label={item.checked ? "Uncheck item" : "Check item"}
-                            >
-                              {item.checked && (
-                                <Check size={13} className="text-white" />
-                              )}
-                            </button>
-
-                            {editingId === item.id ? (
-                              <div className="flex-1 flex gap-2 items-center">
-                                <input
-                                  className="w-16 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
-                                  value={editBuf.quantity}
-                                  onChange={(event) =>
-                                    setEditBuf({
-                                      ...editBuf,
-                                      quantity: event.target.value,
-                                    })
-                                  }
-                                  placeholder="Qty"
-                                />
-                                <input
-                                  className="w-20 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
-                                  value={editBuf.unit}
-                                  onChange={(event) =>
-                                    setEditBuf({
-                                      ...editBuf,
-                                      unit: event.target.value,
-                                    })
-                                  }
-                                  placeholder="Unit"
-                                />
-                                <input
-                                  className="flex-1 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
-                                  value={editBuf.name}
-                                  onChange={(event) =>
-                                    setEditBuf({
-                                      ...editBuf,
-                                      name: event.target.value,
-                                    })
-                                  }
-                                  placeholder="Name"
-                                />
-                                <button
-                                  onClick={() => saveEdit(item.id)}
-                                  className="text-brand-600 hover:text-brand-700"
-                                >
-                                  <Check size={16} />
-                                </button>
-                                <button
-                                  onClick={() => setEditingId(null)}
-                                  className="text-gray-400 hover:text-gray-600"
-                                >
-                                  <X size={16} />
-                                </button>
-                              </div>
-                            ) : (
-                              <div className={`flex-1 min-w-0 ${item.checked ? "opacity-50" : ""}`}>
-                                <div className="flex items-baseline gap-1.5">
-                                  {(item.quantity || item.unit) && (
-                                    <span className="text-sm font-semibold text-brand-700 shrink-0">
-                                      {item.quantity}
-                                      {item.unit && ` ${item.unit}`}
-                                    </span>
-                                  )}
-                                  <span
-                                    className={`text-sm text-gray-800 ${
-                                      item.checked ? "line-through" : ""
-                                    }`}
-                                  >
-                                    {item.name}
-                                  </span>
-                                </div>
-                                {item.recipeNames.length > 0 && (
-                                  <p className="text-xs text-gray-400 truncate">
-                                    {item.recipeNames.join(", ")}
-                                  </p>
-                                )}
-                              </div>
-                            )}
-
-                            {editingId !== item.id && (
-                              <div className="flex items-center gap-1 shrink-0">
-                                <button
-                                  onClick={() => startEdit(item)}
-                                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded transition-colors"
-                                >
-                                  <Edit2 size={14} />
-                                </button>
-                                <button
-                                  onClick={() => removeItem(item.id)}
-                                  className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              </div>
-                            )}
-                          </li>
-                        ))}
-
-                        {addingSection === section ? (
-                              <li className="px-4 py-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 items-center bg-brand-50 sm:flex">
-                                <input
-                                  autoFocus
-                                  className="min-w-0 w-full sm:w-16 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                                  value={newItem.quantity}
-                                  onChange={(event) =>
-                                    setNewItem({
-                                      ...newItem,
-                                      quantity: event.target.value,
-                                    })
-                                  }
-                                  placeholder="Qty"
-                                />
-                                <input
-                                  className="min-w-0 w-full sm:w-20 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                                  value={newItem.unit}
-                                  onChange={(event) =>
-                                    setNewItem({
-                                      ...newItem,
-                                      unit: event.target.value,
-                                    })
-                                  }
-                                  placeholder="Unit"
-                                />
-                                <input
-                                  className="col-span-2 min-w-0 w-full text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white sm:flex-1"
-                                  value={newItem.name}
-                                  onChange={(event) =>
-                                    setNewItem({
-                                      ...newItem,
-                                      name: event.target.value,
-                                    })
-                                  }
-                                  placeholder="Item name"
-                                  onKeyDown={(event) =>
-                                    event.key === "Enter" && addItemToSection(section)
-                                  }
-                                />
-                                <button
-                                  onClick={() => addItemToSection(section)}
-                                  className="text-brand-600 hover:text-brand-700"
-                                >
-                                  <Check size={16} />
-                                </button>
-                                <button
-                                  onClick={() => setAddingSection(null)}
-                                  className="text-gray-400"
-                                >
-                                  <X size={16} />
-                                </button>
-                              </li>
-                            ) : (
-                              <li>
-                                <button
-                                  onClick={() => {
-                                    setAddingSection(section);
-                                    setNewItem({ name: "", quantity: "", unit: "" });
-                                  }}
-                                  className="w-full px-4 py-2 flex items-center gap-2 text-sm text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
-                                >
-                                  <Plus size={14} />
-                                  Add item
-                                </button>
-                              </li>
-                            )}
-                      </ul>
+                key={section}
+                className="bg-white rounded-xl border border-gray-200 overflow-hidden"
+              >
+                <button
+                  className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
+                  onClick={() => toggleSection(section)}
+                >
+                  <div className="flex items-center gap-2">
+                    {collapsed ? (
+                      <ChevronRight size={16} className="text-gray-400" />
+                    ) : (
+                      <ChevronDown size={16} className="text-gray-400" />
                     )}
+                    <span className="font-semibold text-gray-800 text-sm">{section}</span>
+                    <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+                      {sectionItems.length}
+                    </span>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </>
+                  {sectionChecked > 0 && (
+                    <span className="text-xs text-brand-600 font-medium">
+                      {sectionChecked}/{sectionItems.length}
+                    </span>
+                  )}
+                </button>
+
+                {!collapsed && (
+                  <ul className="divide-y divide-gray-50">
+                    {sectionItems.map((item) => renderItemRow(item))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <button
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
+              onClick={() => toggleSection(EXTRA_ITEMS_SECTION)}
+            >
+              <div className="flex items-center gap-2">
+                {collapsedSections.has(EXTRA_ITEMS_SECTION) ? (
+                  <ChevronRight size={16} className="text-gray-400" />
+                ) : (
+                  <ChevronDown size={16} className="text-gray-400" />
+                )}
+                <span className="font-semibold text-gray-800 text-sm">
+                  {EXTRA_ITEMS_SECTION}
+                </span>
+                <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+                  {extraVisibleItems.length}
+                </span>
+              </div>
+              {extraCheckedCount > 0 && (
+                <span className="text-xs text-brand-600 font-medium">
+                  {extraCheckedCount}/{extraVisibleItems.length}
+                </span>
+              )}
+            </button>
+
+            {!collapsedSections.has(EXTRA_ITEMS_SECTION) && (
+              <>
+                {extraVisibleItems.length === 0 && (
+                  <p className="px-4 pt-3 text-sm text-gray-400">
+                    Items you add here aren&apos;t tied to a recipe — handy for
+                    staples like salt that you just need to restock.
+                  </p>
+                )}
+                <ul className="divide-y divide-gray-50">
+                  {extraVisibleItems.map((item) => renderItemRow(item))}
+
+                  {addingExtraItem ? (
+                    <li className="px-4 py-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 items-center bg-brand-50 sm:flex">
+                      <input
+                        autoFocus
+                        className="min-w-0 w-full sm:w-16 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
+                        value={newItem.quantity}
+                        onChange={(event) =>
+                          setNewItem({
+                            ...newItem,
+                            quantity: event.target.value,
+                          })
+                        }
+                        placeholder="Qty"
+                      />
+                      <input
+                        className="min-w-0 w-full sm:w-20 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
+                        value={newItem.unit}
+                        onChange={(event) =>
+                          setNewItem({
+                            ...newItem,
+                            unit: event.target.value,
+                          })
+                        }
+                        placeholder="Unit"
+                      />
+                      <input
+                        className="col-span-2 min-w-0 w-full text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white sm:flex-1"
+                        value={newItem.name}
+                        onChange={(event) =>
+                          setNewItem({
+                            ...newItem,
+                            name: event.target.value,
+                          })
+                        }
+                        placeholder="Item name"
+                        onKeyDown={(event) =>
+                          event.key === "Enter" && addExtraItem()
+                        }
+                      />
+                      <button
+                        onClick={() => addExtraItem()}
+                        className="text-brand-600 hover:text-brand-700"
+                      >
+                        <Check size={16} />
+                      </button>
+                      <button
+                        onClick={() => setAddingExtraItem(false)}
+                        className="text-gray-400"
+                      >
+                        <X size={16} />
+                      </button>
+                    </li>
+                  ) : (
+                    <li>
+                      <button
+                        onClick={() => {
+                          setAddingExtraItem(true);
+                          setNewItem({ name: "", quantity: "", unit: "" });
+                        }}
+                        className="w-full px-4 py-2 flex items-center gap-2 text-sm text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+                      >
+                        <Plus size={14} />
+                        Add item
+                      </button>
+                    </li>
+                  )}
+                </ul>
+              </>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

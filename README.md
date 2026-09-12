@@ -8,7 +8,8 @@ A web app for managing recipes, planning weekly meals, and generating grocery li
 - **Dish Photos** — Attach photos of dishes you've cooked to each recipe
 - **Weekly Planner** — Select which recipes you want to cook this week
 - **Shopping List** — Auto-generated from your weekly plan, organized by grocery store section
-  - Edit quantities, remove items, add extras
+  - Edit quantities, remove items
+  - "Extra Items" section for one-off items that aren't tied to any recipe (like restocking salt)
   - Checklist mode to check off items while shopping
 - **Smart Merging** — Identical ingredients across recipes are combined intelligently
 
