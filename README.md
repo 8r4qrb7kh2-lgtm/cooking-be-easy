@@ -11,6 +11,7 @@ A web app for managing recipes, planning weekly meals, and generating grocery li
   - Edit quantities, remove items
   - "Extra Items" section for one-off items that aren't tied to any recipe (like restocking salt)
   - Checklist mode to check off items while shopping
+- **Cooking History** — A dashboard of how often you make each dish over time, from the meals you log in cooking mode
 - **Smart Merging** — Identical ingredients across recipes are combined intelligently
 
 ## iPhone app

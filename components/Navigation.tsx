@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, CalendarDays, ShoppingCart, Flame, LogOut, Users, Receipt } from "lucide-react";
+import { BookOpen, CalendarDays, ShoppingCart, Flame, LogOut, Users, Receipt, BarChart3 } from "lucide-react";
 import { useAuth } from "./AuthProvider";
 import HouseholdModal from "./HouseholdModal";
 import GooseChefLogo from "./GooseChefLogo";
@@ -31,6 +31,16 @@ export default function Navigation() {
           <div className="flex-1" />
           {user && (
             <>
+              <Link
+                href="/history"
+                className={`flex items-center gap-1.5 text-xs transition-colors px-2 py-1 rounded-lg hover:bg-gray-100 ${
+                  pathname === "/history" ? "text-brand-600" : "text-gray-400 hover:text-gray-600"
+                }`}
+                title="Cooking history"
+              >
+                <BarChart3 size={14} />
+                <span className="hidden sm:inline">History</span>
+              </Link>
               <button
                 onClick={() => setShowHousehold(true)}
                 className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors px-2 py-1 rounded-lg hover:bg-gray-100"
