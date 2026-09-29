@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
     const ingredientIds = new Set(parsedIngredients.map((ingredient) => ingredient.id));
 
     const message = await client.messages.create({
-      model: "claude-sonnet-4-5-20250929",
+      model: "claude-sonnet-5-5",
       max_tokens: 2048,
       messages: [
         {

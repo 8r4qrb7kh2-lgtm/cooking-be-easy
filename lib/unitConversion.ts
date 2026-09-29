@@ -105,7 +105,7 @@ const USDA_DATA_TYPES = ["Foundation", "SR Legacy"] as const;
 const USDA_SEARCH_RESULT_LIMIT = 6;
 const USDA_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
 const DENSITY_CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 7;
-const DENSITY_CLAUDE_MODEL = "claude-haiku-4-5-20251001";
+const DENSITY_CLAUDE_MODEL = "claude-sonnet-5-5";
 
 const SEARCH_STOP_WORDS = new Set([
   "a",

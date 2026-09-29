@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
     const mediaType = imageBase64.match(/^data:(image\/\w+);base64,/)?.[1] || "image/jpeg";
 
     const message = await client.messages.create({
-      model: "claude-sonnet-4-5-20250929",
+      model: "claude-sonnet-5-5",
       max_tokens: 3072,
       messages: [
         {
