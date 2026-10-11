@@ -1,5 +1,6 @@
 import { RecipeCookTime } from "./types";
 import { getSupabase } from "./supabase";
+import { getHouseholdId, getUserId } from "./session";
 
 // How long a dish takes is reported per person (the post-cook prompt asks, the
 // recipe page lets you edit it) and shown as the average across everyone who
@@ -61,26 +62,6 @@ export function cookTimeChipStyle(hue: number): {
     background: `hsl(${hue}, 80%, 89%)`,
     borderColor: `hsl(${hue}, 58%, 55%)`,
   };
-}
-
-async function getUserId(): Promise<string> {
-  const supabase = getSupabase();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.user) throw new Error("Not authenticated");
-  return session.user.id;
-}
-
-async function getHouseholdId(): Promise<string | null> {
-  const supabase = getSupabase();
-  const userId = await getUserId();
-  const { data } = await supabase
-    .from("household_members")
-    .select("household_id")
-    .eq("user_id", userId)
-    .single();
-  return data?.household_id ?? null;
 }
 
 function mapCookTimeRow(row: any): RecipeCookTime | null {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { clearHouseholdCache } from "@/lib/session";
 import { X, Copy, Check, Loader2, Users, Link as LinkIcon } from "lucide-react";
 
 interface Member {
@@ -40,6 +41,7 @@ export default function HouseholdModal({ onClose }: { onClose: () => void }) {
       if (data.token) {
         setInviteUrl(`${window.location.origin}/invite/${data.token}`);
         // Refresh household info (user may have just created one)
+        clearHouseholdCache();
         const hRes = await fetch("/api/household");
         const hData = await hRes.json();
         setHousehold(hData.household);

@@ -6,7 +6,7 @@ import { useAuth } from "./AuthProvider";
 import StarRow from "./StarRow";
 import CookTimeSlider from "./CookTimeSlider";
 import { getCookLogs } from "@/lib/cookLog";
-import { getRecipe } from "@/lib/storage";
+import { getRecipeSummary } from "@/lib/storage";
 import {
   getDisplayName,
   getMyRatedRecipeIds,
@@ -146,7 +146,7 @@ export default function RatingPrompt() {
     if (!current || !userId) return;
     let cancelled = false;
     Promise.all([
-      getRecipe(current.recipeId),
+      getRecipeSummary(current.recipeId),
       getRatingsForRecipe(current.recipeId),
       getCookTimesForRecipe(current.recipeId),
       // Only a nicety — if it can't be worked out, the slider just starts at the

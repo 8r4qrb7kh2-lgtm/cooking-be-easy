@@ -1,26 +1,7 @@
 import { CookLogEntry } from "./types";
 import { getSupabase } from "./supabase";
+import { getHouseholdId, getUserId } from "./session";
 import { todayKey } from "./mealPlan";
-
-async function getUserId(): Promise<string> {
-  const supabase = getSupabase();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.user) throw new Error("Not authenticated");
-  return session.user.id;
-}
-
-async function getHouseholdId(): Promise<string | null> {
-  const supabase = getSupabase();
-  const userId = await getUserId();
-  const { data } = await supabase
-    .from("household_members")
-    .select("household_id")
-    .eq("user_id", userId)
-    .single();
-  return data?.household_id ?? null;
-}
 
 function mapCookLogRow(row: any): CookLogEntry | null {
   if (

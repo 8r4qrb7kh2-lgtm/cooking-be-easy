@@ -13,7 +13,7 @@ import {
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { Ingredient, Recipe } from "@/lib/types";
-import { getRecipe } from "@/lib/storage";
+import { getRecipeSummary } from "@/lib/storage";
 import { logCookedToday, wasCookedToday } from "@/lib/cookLog";
 import {
   COOKING_SESSION_HEARTBEAT_MS,
@@ -222,7 +222,7 @@ export default function CookingModePage() {
 
   useEffect(() => {
     let cancelled = false;
-    getRecipe(id).then(async (r) => {
+    getRecipeSummary(id).then(async (r) => {
       if (!r || !r.steps || r.steps.length === 0) {
         router.replace("/cook");
         return;

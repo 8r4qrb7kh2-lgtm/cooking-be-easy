@@ -190,8 +190,8 @@ export default function RecipesPage() {
                     </h3>
                     <p className="text-xs text-gray-400 mt-1">
                       {recipe.ingredients.length} ingredients
-                      {recipe.dishPhotos.length > 0 &&
-                        ` · ${recipe.dishPhotos.length} photo${recipe.dishPhotos.length > 1 ? "s" : ""}`}
+                      {(recipe.dishPhotoCount ?? 0) > 0 &&
+                        ` · ${recipe.dishPhotoCount} photo${recipe.dishPhotoCount === 1 ? "" : "s"}`}
                     </p>
                   </div>
                 </div>

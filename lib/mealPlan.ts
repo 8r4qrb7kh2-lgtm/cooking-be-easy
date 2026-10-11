@@ -1,5 +1,6 @@
 import { MealPlanEntry, MealSlot } from "./types";
 import { getSupabase } from "./supabase";
+import { getHouseholdId, getUserId } from "./session";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -104,26 +105,6 @@ export function formatDaysSinceMadeShort(daysSinceMade: number | null): string {
 }
 
 // --- Supabase CRUD (mirrors lib/storage.ts patterns) ---
-
-async function getUserId(): Promise<string> {
-  const supabase = getSupabase();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.user) throw new Error("Not authenticated");
-  return session.user.id;
-}
-
-async function getHouseholdId(): Promise<string | null> {
-  const supabase = getSupabase();
-  const userId = await getUserId();
-  const { data } = await supabase
-    .from("household_members")
-    .select("household_id")
-    .eq("user_id", userId)
-    .single();
-  return data?.household_id ?? null;
-}
 
 function isMealSlot(value: unknown): value is MealSlot {
   return value === "lunch" || value === "dinner";

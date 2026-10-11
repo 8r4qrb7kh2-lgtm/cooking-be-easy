@@ -1,5 +1,6 @@
 import { Recipe, ShoppingListItem } from "./types";
 import { getSupabase } from "./supabase";
+import { getHouseholdId, getUserId } from "./session";
 import { normalizeRecipeSteps } from "./recipeSteps";
 
 function parseOptionalNumber(value: unknown): number | undefined {
@@ -11,24 +12,56 @@ function parseOptionalNumber(value: unknown): number | undefined {
   return undefined;
 }
 
-async function getUserId(): Promise<string> {
-  const supabase = getSupabase();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.user) throw new Error("Not authenticated");
-  return session.user.id;
+// Dish photos are full-size base64 data URLs stored on the recipe row, so list
+// views read everything except them and show `dish_thumbnail` instead.
+const RECIPE_SUMMARY_COLUMNS =
+  "id,name,ingredients,steps,notes,rating,servings_yielded,dish_thumbnail,dish_photo_count,source_url,created_at,updated_at";
+
+// Shorter side of the thumbnail, in px. Keep in sync with
+// scripts/backfillDishThumbnails.mjs.
+const DISH_THUMBNAIL_SIZE = 320;
+const DISH_THUMBNAIL_QUALITY = 0.7;
+
+let lastThumbnail: { photo: string; thumbnail: string } | null = null;
+
+async function makeDishThumbnail(photo: string | undefined): Promise<string | null> {
+  if (!photo || typeof document === "undefined") return null;
+  // Auto-save calls this on every edit; the first photo rarely changes.
+  if (lastThumbnail?.photo === photo) return lastThumbnail.thumbnail;
+
+  try {
+    const image = new Image();
+    image.src = photo;
+    await image.decode();
+    const scale = Math.min(
+      1,
+      DISH_THUMBNAIL_SIZE / Math.min(image.naturalWidth, image.naturalHeight)
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(image.naturalWidth * scale);
+    canvas.height = Math.round(image.naturalHeight * scale);
+    canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const thumbnail = canvas.toDataURL("image/jpeg", DISH_THUMBNAIL_QUALITY);
+    lastThumbnail = { photo, thumbnail };
+    return thumbnail;
+  } catch {
+    // Fall back to the photo itself so the recipe still has a list image.
+    return photo;
+  }
 }
 
-async function getHouseholdId(): Promise<string | null> {
-  const supabase = getSupabase();
-  const userId = await getUserId();
-  const { data } = await supabase
-    .from("household_members")
-    .select("household_id")
-    .eq("user_id", userId)
-    .single();
-  return data?.household_id ?? null;
+// The recipe list is needed by nearly every page, so it's kept for a short
+// while to make moving between tabs instant. Local writes drop it; the expiry
+// bounds how stale a household member's edits can look.
+const RECIPES_CACHE_MS = 60 * 1000;
+let recipesCache: {
+  userId: string;
+  loadedAt: number;
+  recipes: Promise<Recipe[]>;
+} | null = null;
+
+export function clearRecipesCache() {
+  recipesCache = null;
 }
 
 function collectStringArray(value: unknown): string[] {
@@ -105,6 +138,13 @@ function mapRecipeRow(row: any): {
   normalizedStepsChanged: boolean;
 } {
   const parsedSteps = parseRecipeStepsField(row.steps);
+  // Summary rows carry only the thumbnail of the first photo.
+  const isSummary = row.dish_photos === undefined;
+  const dishPhotos: string[] = isSummary
+    ? row.dish_thumbnail
+      ? [row.dish_thumbnail]
+      : []
+    : row.dish_photos || [];
 
   return {
     recipe: {
@@ -116,7 +156,9 @@ function mapRecipeRow(row: any): {
       notes: typeof row.notes === "string" ? row.notes : "",
       rating: parseOptionalNumber(row.rating),
       servingsYielded: parseOptionalNumber(row.servings_yielded),
-      dishPhotos: row.dish_photos || [],
+      dishPhotos,
+      dishPhotoCount: isSummary ? row.dish_photo_count ?? dishPhotos.length : dishPhotos.length,
+      ...(isSummary ? { isSummary: true as const } : {}),
       ingredientPhoto: row.ingredient_photo || undefined,
       sourceUrl: row.source_url || undefined,
       createdAt: row.created_at,
@@ -126,12 +168,36 @@ function mapRecipeRow(row: any): {
   };
 }
 
+// Every recipe, without full-size photos: `dishPhotos` holds just a thumbnail of
+// the first one. Use getRecipe() for the complete recipe.
 export async function getRecipes(): Promise<Recipe[]> {
+  const userId = await getUserId();
+  const cached = recipesCache;
+  if (
+    cached &&
+    cached.userId === userId &&
+    Date.now() - cached.loadedAt < RECIPES_CACHE_MS
+  ) {
+    return [...(await cached.recipes)];
+  }
+
+  const recipes = loadRecipes();
+  const entry = { userId, loadedAt: Date.now(), recipes };
+  recipesCache = entry;
+  try {
+    return [...(await recipes)];
+  } catch (error) {
+    if (recipesCache === entry) clearRecipesCache();
+    throw error;
+  }
+}
+
+async function loadRecipes(): Promise<Recipe[]> {
   const supabase = getSupabase();
   // RLS handles filtering: returns own recipes + household members' recipes
   const { data, error } = await supabase
     .from("recipes")
-    .select("*")
+    .select(RECIPE_SUMMARY_COLUMNS)
     .order("updated_at", { ascending: false });
 
   if (error) throw error;
@@ -176,6 +242,16 @@ export async function getRecipe(id: string): Promise<Recipe | undefined> {
   if (error || !data) return undefined;
 
   const mapped = mapRecipeRow(data);
+
+  // Recipes last saved by an older build of the app have photos but no thumbnail.
+  if (mapped.recipe.dishPhotos.length > 0 && !data.dish_thumbnail) {
+    void makeDishThumbnail(mapped.recipe.dishPhotos[0]).then(async (thumbnail) => {
+      if (!thumbnail) return;
+      await supabase.from("recipes").update({ dish_thumbnail: thumbnail }).eq("id", id);
+      clearRecipesCache();
+    });
+  }
+
   if (mapped.normalizedStepsChanged) {
     await supabase
       .from("recipes")
@@ -189,10 +265,27 @@ export async function getRecipe(id: string): Promise<Recipe | undefined> {
   return mapped.recipe;
 }
 
+// A single recipe without its full-size photos, for screens that don't show them.
+export async function getRecipeSummary(id: string): Promise<Recipe | undefined> {
+  const { data, error } = await getSupabase()
+    .from("recipes")
+    .select(RECIPE_SUMMARY_COLUMNS)
+    .eq("id", id)
+    .single();
+
+  if (error || !data) return undefined;
+  return mapRecipeRow(data).recipe;
+}
+
 export async function saveRecipe(recipe: Recipe): Promise<void> {
+  if (recipe.isSummary) {
+    // A summary only has a thumbnail; saving it would overwrite the real photos.
+    throw new Error("Cannot save a recipe loaded without its photos");
+  }
   const supabase = getSupabase();
   const userId = await getUserId();
   const serializedSteps = serializeRecipeSteps(recipe);
+  const dishThumbnail = await makeDishThumbnail(recipe.dishPhotos[0]);
   const { error } = await supabase.from("recipes").upsert({
     id: recipe.id,
     user_id: userId,
@@ -203,6 +296,7 @@ export async function saveRecipe(recipe: Recipe): Promise<void> {
     rating: recipe.rating ?? null,
     servings_yielded: recipe.servingsYielded ?? null,
     dish_photos: recipe.dishPhotos,
+    dish_thumbnail: dishThumbnail,
     ingredient_photo: recipe.ingredientPhoto || null,
     source_url: recipe.sourceUrl || null,
     created_at: recipe.createdAt,
@@ -210,6 +304,7 @@ export async function saveRecipe(recipe: Recipe): Promise<void> {
   });
 
   if (error) throw error;
+  clearRecipesCache();
 }
 
 export async function deleteRecipe(id: string): Promise<void> {
@@ -240,6 +335,7 @@ export async function deleteRecipe(id: string): Promise<void> {
 
   const { error } = await supabase.from("recipes").delete().eq("id", id);
   if (error) throw error;
+  clearRecipesCache();
 }
 
 export async function getWeeklyPlanIds(): Promise<string[]> {

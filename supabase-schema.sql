@@ -38,6 +38,9 @@ create table recipes (
   rating int check (rating between 1 and 5),
   servings_yielded numeric(6,2),
   dish_photos text[] not null default '{}',
+  -- small data-URL thumbnail of dish_photos[1], so list views can skip the full photos
+  dish_thumbnail text,
+  dish_photo_count int generated always as (coalesce(cardinality(dish_photos), 0)) stored,
   ingredient_photo text,
   source_url text,
   created_at timestamptz not null default now(),

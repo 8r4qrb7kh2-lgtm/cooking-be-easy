@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
+import { clearHouseholdCache } from "@/lib/session";
+import { clearRecipesCache } from "@/lib/storage";
 import { getSupabase } from "@/lib/supabase";
 import { ChefHat, Loader2, Users, CheckCircle2, XCircle } from "lucide-react";
 
@@ -84,6 +86,8 @@ export default function InvitePage() {
         return;
       }
 
+      clearHouseholdCache();
+      clearRecipesCache();
       setStatus("success");
       setTimeout(() => router.push("/recipes"), 2000);
     } catch {

@@ -1,26 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getSupabase } from "./supabase";
+import { getHouseholdId, getUserId } from "./session";
 import { Receipt, ReceiptItem, GrocerySection } from "./types";
-
-async function getUserId(): Promise<string> {
-  const supabase = getSupabase();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.user) throw new Error("Not authenticated");
-  return session.user.id;
-}
-
-async function getHouseholdId(): Promise<string | null> {
-  const supabase = getSupabase();
-  const userId = await getUserId();
-  const { data } = await supabase
-    .from("household_members")
-    .select("household_id")
-    .eq("user_id", userId)
-    .single();
-  return data?.household_id ?? null;
-}
 
 function numberOrNull(value: unknown): number | undefined {
   if (value === null || value === undefined || value === "") return undefined;

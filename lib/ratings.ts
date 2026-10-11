@@ -1,26 +1,8 @@
 import { User } from "@supabase/supabase-js";
 import { RecipeRating } from "./types";
 import { getSupabase } from "./supabase";
-
-async function getUserId(): Promise<string> {
-  const supabase = getSupabase();
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session?.user) throw new Error("Not authenticated");
-  return session.user.id;
-}
-
-async function getHouseholdId(): Promise<string | null> {
-  const supabase = getSupabase();
-  const userId = await getUserId();
-  const { data } = await supabase
-    .from("household_members")
-    .select("household_id")
-    .eq("user_id", userId)
-    .single();
-  return data?.household_id ?? null;
-}
+import { getHouseholdId, getUserId } from "./session";
+import { clearRecipesCache } from "./storage";
 
 export function getDisplayName(user: User | null): string | null {
   if (!user) return null;
@@ -136,6 +118,7 @@ export async function saveMyRating(params: {
     .from("recipes")
     .update({ rating: average === null ? null : Math.round(average) })
     .eq("id", params.recipeId);
+  clearRecipesCache();
 
   return fresh;
 }

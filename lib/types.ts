@@ -54,6 +54,10 @@ export interface Recipe {
   rating?: number; // cached average of recipe_ratings, kept for list/sort compatibility
   servingsYielded?: number; // actual servings this recipe produced
   dishPhotos: string[]; // base64 data URLs
+  dishPhotoCount?: number; // total photos, even when dishPhotos is trimmed
+  // Set on recipes from getRecipes(): dishPhotos holds only a thumbnail of the
+  // first photo and ingredientPhoto is omitted. Such a recipe can't be saved.
+  isSummary?: true;
   ingredientPhoto?: string; // base64 data URL of the original photo
   sourceUrl?: string; // URL the recipe was imported from
   createdAt: string;
