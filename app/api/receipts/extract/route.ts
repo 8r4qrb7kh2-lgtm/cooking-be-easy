@@ -132,7 +132,7 @@ export async function POST(request: NextRequest) {
       max_tokens: 16000,
       system: SYSTEM_PROMPT,
       tools: [RECEIPT_TOOL],
-      tool_choice: { type: "tool", name: "submit_receipt" },
+      tool_choice: { type: "auto" },
       messages: [
         {
           role: "user",

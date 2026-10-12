@@ -662,7 +662,7 @@ async function resolveDensityWithClaude(
   try {
     const message = await anthropic.messages.create({
       model: DENSITY_CLAUDE_MODEL,
-      max_tokens: 256,
+      max_tokens: 2048,
       system:
         "You are a food-science reference. Given a cooking ingredient, return its typical density in grams per milliliter (g/mL) as prepared for recipes. Examples: water 1.0, all-purpose flour 0.53, granulated sugar 0.85, honey 1.42, olive oil 0.92, table salt 1.2, kosher salt 0.69, brown sugar (packed) 0.93, rolled oats 0.38. Use the form the ingredient is typically measured in. Always return a positive number; never refuse.",
       tools: [
@@ -685,11 +685,11 @@ async function resolveDensityWithClaude(
           },
         },
       ],
-      tool_choice: { type: "tool", name: "submit_density" },
+      tool_choice: { type: "auto" },
       messages: [
         {
           role: "user",
-          content: `Density in g/mL for this cooking ingredient: "${ingredientName}".`,
+          content: `Density in g/mL for this cooking ingredient: "${ingredientName}". Call submit_density with the answer.`,
         },
       ],
     });

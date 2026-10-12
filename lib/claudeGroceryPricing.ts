@@ -234,15 +234,15 @@ async function callClaudeForPricing(
   }));
 
   const userContent = hasReceipts
-    ? `Match each ingredient to the most applicable receipt item id, and provide a fallback estimate.\n\nreceiptLibrary:\n${JSON.stringify(receiptPayload, null, 2)}\n\ningredients:\n${JSON.stringify(userPayload, null, 2)}\n\nReturn one entry per ingredient, matching ingredientId exactly.`
-    : `The user has no receipt library yet. Set matchedReceiptItemId to "" for every ingredient and estimate typical US grocery prices.\n\ningredients:\n${JSON.stringify(userPayload, null, 2)}\n\nReturn one entry per ingredient, matching ingredientId exactly.`;
+    ? `Match each ingredient to the most applicable receipt item id, and provide a fallback estimate.\n\nreceiptLibrary:\n${JSON.stringify(receiptPayload, null, 2)}\n\ningredients:\n${JSON.stringify(userPayload, null, 2)}\n\nCall submit_pricing with one entry per ingredient, matching ingredientId exactly.`
+    : `The user has no receipt library yet. Set matchedReceiptItemId to "" for every ingredient and estimate typical US grocery prices.\n\ningredients:\n${JSON.stringify(userPayload, null, 2)}\n\nCall submit_pricing with one entry per ingredient, matching ingredientId exactly.`;
 
   const message = await anthropic.messages.create({
     model: CLAUDE_PRICING_MODEL,
     max_tokens: 8192,
     system: buildSystemPrompt(hasReceipts),
     tools: [PRICING_TOOL],
-    tool_choice: { type: "tool", name: "submit_pricing" },
+    tool_choice: { type: "auto" },
     messages: [{ role: "user", content: userContent }],
   });
 
