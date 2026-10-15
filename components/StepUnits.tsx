@@ -2,9 +2,10 @@ import { Fragment } from "react";
 
 /** Add display-only unit cues without changing stored amounts or citation offsets. */
 export function formatStepUnits(text: string) {
+  // Normalize every spelling (tablespoons, Tbsp, tsps, teaspoon…) to tbsp/tsp.
   const formatted = text.replace(
-    /\b(tbsp|tsp)\b(?!\s*\((?:🍽️|🍵)\))/gi,
-    (unit) => `${unit} (${unit.toLowerCase() === "tbsp" ? "🍽️" : "🍵"})`
+    /\b(?:(tablespoons?|table spoons?|tbsps?|tbs|tbl)|(teaspoons?|tea spoons?|tsps?))\b(?:\s*\((?:🍽️|🍵)\))?/gi,
+    (_match, tablespoon?: string) => (tablespoon ? "tbsp (🍽️)" : "tsp (🍵)")
   );
   if (!formatted.includes("🍽️")) return formatted;
 
