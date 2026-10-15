@@ -13,9 +13,7 @@ import {
 } from "@/lib/types";
 import {
   getRecipes,
-  getShoppingList,
   getWeeklyPlanIds,
-  saveShoppingList,
   setWeeklyPlanIds,
 } from "@/lib/storage";
 import { getCookLogs } from "@/lib/cookLog";
@@ -28,7 +26,6 @@ import {
   getRecipeCookTimes,
 } from "@/lib/cookTimes";
 import { averageRating, getDisplayName, getRecipeRatings } from "@/lib/ratings";
-import { buildPreservedShoppingList } from "@/lib/utils";
 import { useAuth } from "@/components/AuthProvider";
 import {
   addDaysToKey,
@@ -783,20 +780,16 @@ export default function PlannerPage() {
     setAddingToShopping(true);
     setShoppingMessage(null);
     try {
-      const [existingList, existingIds] = await Promise.all([
-        getShoppingList(),
-        getWeeklyPlanIds(),
-      ]);
+      const existingIds = await getWeeklyPlanIds();
       const mergedIds = Array.from(
         new Set([...existingIds, ...weekShoppingRecipeIds])
       );
       const addedCount = mergedIds.length - existingIds.length;
-      const nextList = buildPreservedShoppingList(mergedIds, recipesById, existingList);
-      await Promise.all([setWeeklyPlanIds(mergedIds), saveShoppingList(nextList)]);
+      await setWeeklyPlanIds(mergedIds);
       setShoppingMessage(
         addedCount === 0
-          ? "This week's meals are already on your shopping list."
-          : `Added ${addedCount} recipe${addedCount === 1 ? "" : "s"} to your shopping list.`
+          ? "This week's meals are already selected on your shopping list."
+          : `Selected ${addedCount} recipe${addedCount === 1 ? "" : "s"} — tap Generate list on the shopping page.`
       );
     } catch {
       setShoppingMessage("Couldn't update the shopping list. Please try again.");
@@ -974,7 +967,7 @@ export default function PlannerPage() {
         <div className="flex items-center justify-between gap-3 rounded-xl border border-brand-200 bg-brand-50 px-4 py-2.5 text-sm text-brand-800">
           <span>{shoppingMessage}</span>
           <a href="/shopping" className="font-medium text-brand-700 hover:underline shrink-0">
-            View list
+            Go to list
           </a>
         </div>
       )}

@@ -1,11 +1,8 @@
 import {
-  Ingredient,
-  Recipe,
   ShoppingListItem,
   GrocerySection,
   GROCERY_SECTIONS,
 } from "./types";
-import { v4 as uuidv4 } from "uuid";
 
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -43,77 +40,6 @@ export async function compressImage(
   } finally {
     bitmap.close();
   }
-}
-
-export function mergeIngredients(
-  recipes: { id: string; name: string; ingredients: Ingredient[] }[]
-): ShoppingListItem[] {
-  const map = new Map<string, ShoppingListItem>();
-
-  for (const recipe of recipes) {
-    for (const ing of recipe.ingredients) {
-      const key = ing.name.toLowerCase().trim();
-      if (map.has(key)) {
-        const existing = map.get(key)!;
-        // Try to add quantities numerically
-        const existingQty = parseFloat(existing.quantity);
-        const newQty = parseFloat(ing.quantity);
-        if (!isNaN(existingQty) && !isNaN(newQty) && existing.unit === ing.unit) {
-          existing.quantity = String(existingQty + newQty);
-        } else {
-          // Just concatenate with +
-          existing.quantity = `${existing.quantity} + ${ing.quantity}`;
-        }
-        if (!existing.recipeIds.includes(recipe.id)) {
-          existing.recipeIds.push(recipe.id);
-          existing.recipeNames.push(recipe.name);
-        }
-      } else {
-        map.set(key, {
-          id: uuidv4(),
-          name: ing.name,
-          quantity: ing.quantity,
-          unit: ing.unit,
-          section: ing.section,
-          recipeIds: [recipe.id],
-          recipeNames: [recipe.name],
-          checked: false,
-        });
-      }
-    }
-  }
-
-  return Array.from(map.values());
-}
-
-// Rebuild the recipe half of the shopping list from the selected recipes,
-// keeping checkmarks on items that still exist. Manually added items are not
-// part of this — they're stored separately and never touched by recipe
-// changes. Shared by the shopping page and the planner's "add all to shopping
-// list" action.
-export function buildPreservedShoppingList(
-  nextIds: string[],
-  recipesById: Record<string, Recipe>,
-  prevItems: ShoppingListItem[]
-): ShoppingListItem[] {
-  const nextRecipes = nextIds
-    .map((id) => recipesById[id])
-    .filter((recipe): recipe is Recipe => Boolean(recipe));
-  const merged = mergeIngredients(nextRecipes);
-
-  const itemKey = (name: string) => name.toLowerCase().trim();
-  const prevByKey = new Map(
-    prevItems
-      .filter((item) => item.recipeIds.length > 0)
-      .map((item) => [itemKey(item.name), item])
-  );
-  for (const item of merged) {
-    if (prevByKey.get(itemKey(item.name))?.checked) {
-      item.checked = true;
-    }
-  }
-
-  return merged;
 }
 
 export function groupBySection(

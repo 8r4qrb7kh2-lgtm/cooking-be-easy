@@ -16,7 +16,8 @@ import {
 } from "@/lib/storage";
 import { getRecentRecipeViews, RecentRecipeViews } from "@/lib/recentViews";
 import { RecipeSortOption, sortRecipes } from "@/lib/recipeSort";
-import { buildPreservedShoppingList, groupBySection } from "@/lib/utils";
+import { groupBySection } from "@/lib/utils";
+import type { CombinedGroup } from "@/app/api/combine-ingredients/route";
 import PageLoadingScreen from "@/components/PageLoadingScreen";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -26,13 +27,38 @@ import {
   Edit2,
   ImageIcon,
   Plus,
+  Loader2,
   Search,
   ShoppingCart,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 
 type ShoppingTab = "recipes" | "manual";
+
+// One ingredient line from one selected recipe, as sent to Claude.
+interface RecipeEntry {
+  name: string;
+  quantity: string;
+  unit: string;
+  section: string;
+  recipeId: string;
+  recipeName: string;
+}
+
+// A "Generate list" run waiting on the user to confirm each combined item.
+interface PendingGeneration {
+  entries: RecipeEntry[];
+  groups: CombinedGroup[];
+  // Indexes into groups that combine more than one line, in review order.
+  reviewOrder: number[];
+  reviewPosition: number;
+}
+
+function formatQty(quantity: string, unit: string) {
+  return [quantity, unit].filter((part) => part && part.trim()).join(" ") || "—";
+}
 
 function makeManualItem(name: string, quantity = "", unit = ""): ShoppingListItem {
   return {
@@ -75,6 +101,11 @@ export default function ShoppingPage() {
   const [recentViewsByRecipeId, setRecentViewsByRecipeId] =
     useState<RecentRecipeViews>({});
   const [recipesById, setRecipesById] = useState<Record<string, Recipe>>({});
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingGeneration | null>(null);
+  const [reviewBuf, setReviewBuf] = useState({ quantity: "", unit: "" });
+  const [reviewEditing, setReviewEditing] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -178,14 +209,133 @@ export default function ShoppingPage() {
     await saveShoppingList(next);
   }
 
-  // Update the selected recipes and immediately rebuild the shopping list from
-  // them — there is no manual "Update list" step.
+  // Selecting recipes only changes the selection; the list itself is rebuilt
+  // when the user taps "Generate list".
   async function applySelectedRecipes(nextIds: string[]) {
-    const nextList = buildPreservedShoppingList(nextIds, recipesById, items);
     setSelectedRecipeIds(nextIds);
-    setItems(nextList);
+    setGenerateError(null);
+    await setWeeklyPlanIds(nextIds);
+  }
+
+  function startReviewAt(groups: CombinedGroup[], position: number, order: number[]) {
+    const group = groups[order[position]];
+    setReviewBuf({ quantity: group.quantity, unit: group.unit });
+    setReviewEditing(false);
+  }
+
+  async function generateList() {
+    if (generating || selectedRecipes.length === 0) return;
+
+    const entries: RecipeEntry[] = selectedRecipes.flatMap((recipe) =>
+      recipe.ingredients
+        .filter((ingredient) => ingredient.name.trim())
+        .map((ingredient) => ({
+          name: ingredient.name.trim(),
+          quantity: ingredient.quantity ?? "",
+          unit: ingredient.unit ?? "",
+          section: ingredient.section,
+          recipeId: recipe.id,
+          recipeName: recipe.name,
+        }))
+    );
+
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      const response = await fetch("/api/combine-ingredients", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entries: entries.map(({ name, quantity, unit, section, recipeName }) => ({
+            name,
+            quantity,
+            unit,
+            section,
+            recipeName,
+          })),
+        }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const { groups } = (await response.json()) as { groups: CombinedGroup[] };
+
+      const reviewOrder = groups
+        .map((group, index) => (group.entryIndexes.length > 1 ? index : -1))
+        .filter((index) => index >= 0);
+
+      if (reviewOrder.length === 0) {
+        await finishGeneration(entries, groups);
+        return;
+      }
+
+      setPending({ entries, groups, reviewOrder, reviewPosition: 0 });
+      startReviewAt(groups, 0, reviewOrder);
+    } catch {
+      setGenerateError("Couldn't generate the list. Please try again.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  // Save the reviewed quantity for the current duplicate and move on; after
+  // the last one, write the finished list.
+  function saveReviewedGroup() {
+    if (!pending) return;
+    const groupIndex = pending.reviewOrder[pending.reviewPosition];
+    const groups = pending.groups.map((group, index) =>
+      index === groupIndex
+        ? { ...group, quantity: reviewBuf.quantity.trim(), unit: reviewBuf.unit.trim() }
+        : group
+    );
+    const nextPosition = pending.reviewPosition + 1;
+
+    if (nextPosition >= pending.reviewOrder.length) {
+      setPending(null);
+      void finishGeneration(pending.entries, groups);
+      return;
+    }
+
+    setPending({ ...pending, groups, reviewPosition: nextPosition });
+    startReviewAt(groups, nextPosition, pending.reviewOrder);
+  }
+
+  function cancelGeneration() {
+    setPending(null);
+    setReviewEditing(false);
+  }
+
+  // Replace the recipe half of the list, keeping checkmarks on items that
+  // were already checked under the same name.
+  async function finishGeneration(entries: RecipeEntry[], groups: CombinedGroup[]) {
+    const itemKey = (name: string) => name.toLowerCase().trim();
+    const checkedNames = new Set(
+      items.filter((item) => item.checked).map((item) => itemKey(item.name))
+    );
+
+    const nextList: ShoppingListItem[] = groups.map((group) => {
+      const groupEntries = group.entryIndexes.map((index) => entries[index]);
+      const recipeIds: string[] = [];
+      const recipeNames: string[] = [];
+      for (const entry of groupEntries) {
+        if (recipeIds.includes(entry.recipeId)) continue;
+        recipeIds.push(entry.recipeId);
+        recipeNames.push(entry.recipeName);
+      }
+      return {
+        id: uuidv4(),
+        name: group.name,
+        quantity: group.quantity,
+        unit: group.unit,
+        section: group.section,
+        recipeIds,
+        recipeNames,
+        checked:
+          checkedNames.has(itemKey(group.name)) ||
+          groupEntries.some((entry) => checkedNames.has(itemKey(entry.name))),
+      };
+    });
+
     setEditingId(null);
-    await Promise.all([setWeeklyPlanIds(nextIds), saveShoppingList(nextList)]);
+    await persist(nextList);
   }
 
   function toggleCheck(id: string) {
@@ -359,6 +509,15 @@ export default function ShoppingPage() {
       return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
     });
   }, [itemSearchQuery, items, recentViewsByRecipeId, recipesById, sortOption]);
+
+  // The list is out of date when the selection no longer matches the
+  // recipes the current list was generated from.
+  const listOutOfDate = useMemo(() => {
+    const generatedIds = new Set(items.flatMap((item) => item.recipeIds));
+    const selectedIds = new Set(selectedRecipes.map((recipe) => recipe.id));
+    if (generatedIds.size !== selectedIds.size) return true;
+    return [...selectedIds].some((id) => !generatedIds.has(id));
+  }, [items, selectedRecipes]);
 
   const grouped = groupBySection(visibleItems);
   const checkedCount = items.filter((item) => item.checked).length;
@@ -557,6 +716,131 @@ export default function ShoppingPage() {
     );
   }
 
+  function renderReviewModal(current: PendingGeneration) {
+    const group = current.groups[current.reviewOrder[current.reviewPosition]];
+    const sources = group.entryIndexes.map((index) => current.entries[index]);
+    const isLast = current.reviewPosition === current.reviewOrder.length - 1;
+    const inputClass =
+      "min-w-0 text-base px-3 h-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white";
+
+    return (
+      <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40 px-4 pb-[calc(6rem_+_env(safe-area-inset-bottom))] sm:pb-0">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="combine-review-title"
+          className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl max-h-[80vh] overflow-y-auto"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium text-gray-400">
+                Duplicate {current.reviewPosition + 1} of {current.reviewOrder.length}
+              </p>
+              <h2 id="combine-review-title" className="text-lg font-semibold text-gray-900">
+                {group.name}
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={cancelGeneration}
+              className="p-1.5 -mr-1.5 text-gray-400 hover:text-gray-600"
+              aria-label="Cancel generating list"
+            >
+              <X size={18} />
+            </button>
+          </div>
+
+          <div className="mt-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+              In your recipes
+            </p>
+            <ul className="mt-2 divide-y divide-gray-100 rounded-lg border border-gray-200">
+              {sources.map((entry, index) => (
+                <li key={index} className="px-3 py-2 flex items-baseline justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm text-gray-800 truncate">{entry.name}</p>
+                    <p className="text-xs text-gray-400 truncate">{entry.recipeName}</p>
+                  </div>
+                  <span className="text-sm font-medium text-gray-700 shrink-0">
+                    {formatQty(entry.quantity, entry.unit)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="mt-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+              Combined amount
+            </p>
+            {reviewEditing ? (
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <input
+                  autoFocus
+                  className={inputClass}
+                  value={reviewBuf.quantity}
+                  onChange={(event) =>
+                    setReviewBuf({ ...reviewBuf, quantity: event.target.value })
+                  }
+                  placeholder="Qty"
+                  aria-label="Combined quantity"
+                />
+                <input
+                  className={inputClass}
+                  value={reviewBuf.unit}
+                  onChange={(event) => setReviewBuf({ ...reviewBuf, unit: event.target.value })}
+                  placeholder="Unit"
+                  aria-label="Combined unit"
+                />
+              </div>
+            ) : (
+              <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-brand-50 border border-brand-200 px-3 py-2.5">
+                <span className="text-base font-semibold text-brand-800">
+                  {formatQty(reviewBuf.quantity, reviewBuf.unit)}
+                </span>
+                <span className="text-xs text-brand-700">Suggested</span>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-2">
+            {reviewEditing ? (
+              <button
+                type="button"
+                onClick={() => {
+                  const group = current.groups[current.reviewOrder[current.reviewPosition]];
+                  setReviewBuf({ quantity: group.quantity, unit: group.unit });
+                  setReviewEditing(false);
+                }}
+                className="h-11 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                Use suggestion
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setReviewEditing(true)}
+                className="inline-flex items-center justify-center gap-1.5 h-11 rounded-lg border border-gray-200 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <Edit2 size={14} />
+                Edit
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={saveReviewedGroup}
+              className="inline-flex items-center justify-center gap-1.5 h-11 rounded-lg bg-brand-600 text-sm font-semibold text-white hover:bg-brand-700 transition-colors"
+            >
+              <Check size={16} />
+              {reviewEditing ? "Save" : "Approve"}
+              {isLast ? " & finish" : ""}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return <PageLoadingScreen />;
   }
@@ -644,8 +928,9 @@ export default function ShoppingPage() {
           <div>
             <h2 className="text-sm font-semibold text-gray-900">Recipes</h2>
             <p className="text-sm text-gray-500 mt-1">
-              Search and select recipes — the shopping list updates automatically
-              as you add or remove them.
+              Search and select recipes, then tap Generate list. Claude combines
+              ingredients that show up in more than one recipe and asks you to
+              confirm each combined amount.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -777,6 +1062,40 @@ export default function ShoppingPage() {
                 </p>
               </>
             )}
+
+            {selectedRecipes.length > 0 && (
+              <div className="pt-1 space-y-2">
+                <button
+                  type="button"
+                  onClick={() => void generateList()}
+                  disabled={generating}
+                  className="w-full inline-flex items-center justify-center gap-2 h-11 rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-70 transition-colors"
+                >
+                  {generating ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      Combining ingredients…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={16} />
+                      Generate list
+                    </>
+                  )}
+                </button>
+                {generateError ? (
+                  <p className="text-xs text-red-600">{generateError}</p>
+                ) : (
+                  totalCount > 0 &&
+                  listOutOfDate && (
+                    <p className="text-xs text-amber-700">
+                      Your recipe selection changed — tap Generate list to update the
+                      list below.
+                    </p>
+                  )
+                )}
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -786,7 +1105,7 @@ export default function ShoppingPage() {
           <ShoppingCart size={40} className="mx-auto text-gray-300 mb-3" />
           <h2 className="text-base font-semibold text-gray-500">No shopping list yet</h2>
           <p className="text-sm text-gray-400 mt-1">
-            Select recipes above to build your list.
+            Select recipes above, then tap Generate list.
           </p>
         </div>
       )}
@@ -880,6 +1199,8 @@ export default function ShoppingPage() {
       )}
       </>
       )}
+
+      {pending && renderReviewModal(pending)}
     </div>
   );
 }
