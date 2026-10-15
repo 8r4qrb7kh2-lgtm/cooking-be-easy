@@ -14,6 +14,7 @@ handful of things a web page on iOS cannot do for itself:
 | **Google sign-in** | Google refuses OAuth inside an embedded web view, so the shell lifts sign-in into a real Safari session (`ASWebAuthenticationSession`) and carries the auth code back over the `cookingbeeasy://` scheme. |
 | **Timer notifications** | A web view has no Notification API at all. The shell mirrors the cooking timers as iOS local notifications, so they still go off with the app closed and the phone in your pocket. |
 | **`confirm()` dialogs** | A web view silently discards JavaScript dialogs unless the host handles them, which would quietly break every delete confirmation on the site. |
+| **Quick add** | Press and hold the home screen icon for **Add Ingredient**: type a name, hit Save, and it lands on the shopping list's "Added by me" tab (via `/shopping?addItem=`). |
 | **Camera and photos** | Native pickers, with the usage strings iOS requires. |
 | **Home screen presence** | Icon, launch screen, offline retry screen, pull to refresh, swipe-back. |
 

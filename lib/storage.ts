@@ -412,15 +412,42 @@ export async function getShoppingList(): Promise<ShoppingListItem[]> {
   }));
 }
 
+// Manually added items (no recipe) live in the same table, but the list built
+// from recipes is rewritten wholesale whenever the selection changes — so it
+// only ever touches recipe rows, and manual items are written one at a time.
+export function isManualShoppingItem(item: ShoppingListItem): boolean {
+  return item.recipeIds.length === 0;
+}
+
+function toShoppingRow(
+  item: ShoppingListItem,
+  userId: string,
+  householdId: string | null
+) {
+  return {
+    id: item.id,
+    user_id: userId,
+    name: item.name,
+    quantity: item.quantity,
+    unit: item.unit,
+    section: item.section,
+    recipe_ids: item.recipeIds,
+    recipe_names: item.recipeNames,
+    checked: item.checked,
+    ...(householdId ? { household_id: householdId } : {}),
+  };
+}
+
+/** Replace the recipe-generated items. Manual items are left alone. */
 export async function saveShoppingList(
   list: ShoppingListItem[]
 ): Promise<void> {
   const supabase = getSupabase();
   const userId = await getUserId();
   const householdId = await getHouseholdId();
+  const recipeItems = list.filter((item) => !isManualShoppingItem(item));
 
-  // Delete existing list
-  let deleteQuery = supabase.from("shopping_list").delete();
+  let deleteQuery = supabase.from("shopping_list").delete().neq("recipe_ids", "[]");
   if (householdId) {
     deleteQuery = deleteQuery.eq("household_id", householdId);
   } else {
@@ -429,24 +456,28 @@ export async function saveShoppingList(
   const { error: deleteError } = await deleteQuery;
   if (deleteError) throw deleteError;
 
-  // Insert new list
-  if (list.length > 0) {
+  if (recipeItems.length > 0) {
     const { error: insertError } = await supabase
       .from("shopping_list")
-      .insert(
-        list.map((item) => ({
-          id: item.id,
-          user_id: userId,
-          name: item.name,
-          quantity: item.quantity,
-          unit: item.unit,
-          section: item.section,
-          recipe_ids: item.recipeIds,
-          recipe_names: item.recipeNames,
-          checked: item.checked,
-          ...(householdId ? { household_id: householdId } : {}),
-        }))
-      );
+      .insert(recipeItems.map((item) => toShoppingRow(item, userId, householdId)));
     if (insertError) throw insertError;
   }
+}
+
+/** Insert or update a single manually added item. */
+export async function saveManualShoppingItem(item: ShoppingListItem): Promise<void> {
+  const supabase = getSupabase();
+  const userId = await getUserId();
+  const householdId = await getHouseholdId();
+
+  const { error } = await supabase
+    .from("shopping_list")
+    .upsert(toShoppingRow({ ...item, recipeIds: [], recipeNames: [] }, userId, householdId));
+  if (error) throw error;
+}
+
+export async function deleteShoppingItem(id: string): Promise<void> {
+  const supabase = getSupabase();
+  const { error } = await supabase.from("shopping_list").delete().eq("id", id);
+  if (error) throw error;
 }

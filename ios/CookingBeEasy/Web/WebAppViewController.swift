@@ -13,6 +13,7 @@ final class WebAppViewController: UIViewController {
     private let refreshControl = UIRefreshControl()
     private var authSession: ASWebAuthenticationSession?
     private var hasLoadedOnce = false
+    private var wantsQuickAddPrompt = false
 
     /// The site is light in every appearance, so the status bar is always dark.
     override var preferredStatusBarStyle: UIStatusBarStyle { .darkContent }
@@ -27,6 +28,13 @@ final class WebAppViewController: UIViewController {
         addWebView()
         addOverlays()
         loadSite()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if wantsQuickAddPrompt {
+            promptForQuickAddIngredient()
+        }
     }
 
     // MARK: - Setup
@@ -201,6 +209,51 @@ final class WebAppViewController: UIViewController {
 
         guard let url = destination?.url else { return }
         webView.load(URLRequest(url: url))
+    }
+
+    // MARK: - Quick add
+
+    /// The "Add Ingredient" home screen quick action: type a name, hit Save, and
+    /// it lands on the shopping list's manually added tab.
+    func promptForQuickAddIngredient() {
+        // On a cold launch this arrives before the view is on screen, and an
+        // alert presented then would never show.
+        guard view.window != nil else {
+            wantsQuickAddPrompt = true
+            return
+        }
+        wantsQuickAddPrompt = false
+
+        // Whatever was up (a sheet, a Safari view, another alert) makes way.
+        if presentedViewController != nil {
+            dismiss(animated: false)
+        }
+
+        let alert = UIAlertController(
+            title: "Add Ingredient",
+            message: "Adds it to your shopping list.",
+            preferredStyle: .alert
+        )
+        alert.addTextField { field in
+            field.placeholder = "Ingredient name"
+            field.autocapitalizationType = .none
+            field.returnKeyType = .done
+            field.clearButtonMode = .whileEditing
+        }
+
+        let save = UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
+            let name = alert?.textFields?.first?.text?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let self, !name.isEmpty,
+                  let url = AppConfig.quickAddIngredientURL(name: name)
+            else { return }
+            self.errorView.isHidden = true
+            self.webView.load(URLRequest(url: url))
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(save)
+        alert.preferredAction = save
+        present(alert, animated: true)
     }
 
     // MARK: - Helpers

@@ -20,6 +20,19 @@ enum AppConfig {
     /// `NATIVE_APP_URL_SCHEME`.
     static let authCallbackScheme = "cookingbeeasy"
 
+    /// The home screen quick action. Must match `UIApplicationShortcutItemType`
+    /// in Info.plist.
+    static let addIngredientShortcutType = "com.clarivore.cookingbeeasy.add-ingredient"
+
+    /// The shopping page adds `addItem` as a manually added item, then drops
+    /// the parameter. See app/shopping/page.tsx.
+    static func quickAddIngredientURL(name: String) -> URL? {
+        var components = URLComponents(url: siteURL, resolvingAgainstBaseURL: false)
+        components?.path = "/shopping"
+        components?.queryItems = [URLQueryItem(name: "addItem", value: name)]
+        return components?.url
+    }
+
     /// Must match `NATIVE_TIMER_MESSAGE_HANDLER`.
     static let timerMessageHandlerName = "cookingTimers"
 

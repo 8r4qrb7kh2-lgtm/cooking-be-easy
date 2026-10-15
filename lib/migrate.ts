@@ -1,4 +1,10 @@
-import { saveRecipe, setWeeklyPlanIds, saveShoppingList } from "./storage";
+import {
+  isManualShoppingItem,
+  saveManualShoppingItem,
+  saveRecipe,
+  saveShoppingList,
+  setWeeklyPlanIds,
+} from "./storage";
 import { AppState } from "./types";
 
 const OLD_STORAGE_KEY = "meal-maker-state";
@@ -36,6 +42,9 @@ export async function migrateLocalStorageToSupabase(): Promise<void> {
     // Migrate shopping list
     if (state.shoppingList?.length) {
       await saveShoppingList(state.shoppingList);
+      for (const item of state.shoppingList.filter(isManualShoppingItem)) {
+        await saveManualShoppingItem(item);
+      }
     }
 
     localStorage.removeItem(OLD_STORAGE_KEY);

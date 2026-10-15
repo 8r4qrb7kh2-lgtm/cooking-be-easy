@@ -5,9 +5,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { GROCERY_SECTIONS, Recipe, ShoppingListItem } from "@/lib/types";
 import {
+  deleteShoppingItem,
   getRecipes,
   getShoppingList,
   getWeeklyPlanIds,
+  isManualShoppingItem,
+  saveManualShoppingItem,
   saveShoppingList,
   setWeeklyPlanIds,
 } from "@/lib/storage";
@@ -29,14 +32,36 @@ import {
   X,
 } from "lucide-react";
 
-const EXTRA_ITEMS_SECTION = "Extra Items";
+type ShoppingTab = "recipes" | "manual";
+
+function makeManualItem(name: string, quantity = "", unit = ""): ShoppingListItem {
+  return {
+    id: uuidv4(),
+    name: name.trim(),
+    quantity: quantity.trim(),
+    unit: unit.trim(),
+    section: "Other",
+    recipeIds: [],
+    recipeNames: [],
+    checked: false,
+  };
+}
 
 export default function ShoppingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const recipePickerRef = useRef<HTMLDivElement | null>(null);
+  const handledQuickAddRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<ShoppingTab>(
+    searchParams.get("tab") === "manual" || searchParams.get("addItem")
+      ? "manual"
+      : "recipes"
+  );
+  // Recipe-generated items and manually added items are kept apart: the
+  // former is rebuilt whenever the recipe selection changes, the latter never.
   const [items, setItems] = useState<ShoppingListItem[]>([]);
+  const [manualItems, setManualItems] = useState<ShoppingListItem[]>([]);
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [selectedRecipeIds, setSelectedRecipeIds] = useState<string[]>([]);
   const [recipePickerOpen, setRecipePickerOpen] = useState(false);
@@ -44,7 +69,6 @@ export default function ShoppingPage() {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBuf, setEditBuf] = useState({ quantity: "", unit: "", name: "" });
-  const [addingExtraItem, setAddingExtraItem] = useState(false);
   const [newItem, setNewItem] = useState({ name: "", quantity: "", unit: "" });
   const [itemSearchQuery, setItemSearchQuery] = useState("");
   const [sortOption, setSortOption] = useState<RecipeSortOption>("recently-viewed");
@@ -64,7 +88,8 @@ export default function ShoppingPage() {
           return;
         }
 
-        setItems(shoppingItems);
+        setItems(shoppingItems.filter((item) => !isManualShoppingItem(item)));
+        setManualItems(shoppingItems.filter(isManualShoppingItem));
         setRecipes(loadedRecipes);
         setSelectedRecipeIds(loadedSelectedRecipeIds);
         setRecipesById(
@@ -132,6 +157,22 @@ export default function ShoppingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, recipesById, router, searchParams, selectedRecipeIds]);
 
+  // The iOS home screen quick action ("Add Ingredient") lands here with
+  // ?addItem=<name>.
+  useEffect(() => {
+    if (loading) return;
+
+    const name = searchParams.get("addItem")?.trim();
+    if (!name || handledQuickAddRef.current === name) return;
+    handledQuickAddRef.current = name;
+
+    const item = makeManualItem(name);
+    setManualItems((prev) => [...prev, item]);
+    setActiveTab("manual");
+    router.replace("/shopping?tab=manual");
+    void saveManualShoppingItem(item);
+  }, [loading, router, searchParams]);
+
   async function persist(next: ShoppingListItem[]) {
     setItems(next);
     await saveShoppingList(next);
@@ -144,7 +185,6 @@ export default function ShoppingPage() {
     setSelectedRecipeIds(nextIds);
     setItems(nextList);
     setEditingId(null);
-    setAddingExtraItem(false);
     await Promise.all([setWeeklyPlanIds(nextIds), saveShoppingList(nextList)]);
   }
 
@@ -158,12 +198,33 @@ export default function ShoppingPage() {
     void persist(items.filter((item) => item.id !== id));
   }
 
+  // Checking off a manual item means it's bought, so it just goes away.
+  function removeManualItem(id: string) {
+    setManualItems((prev) => prev.filter((item) => item.id !== id));
+    if (editingId === id) setEditingId(null);
+    void deleteShoppingItem(id);
+  }
+
   function startEdit(item: ShoppingListItem) {
     setEditingId(item.id);
     setEditBuf({ quantity: item.quantity, unit: item.unit, name: item.name });
   }
 
   function saveEdit(id: string) {
+    const manualItem = manualItems.find((item) => item.id === id);
+    if (manualItem) {
+      const updated = {
+        ...manualItem,
+        quantity: editBuf.quantity,
+        unit: editBuf.unit,
+        name: editBuf.name.trim() || manualItem.name,
+      };
+      setManualItems((prev) => prev.map((item) => (item.id === id ? updated : item)));
+      void saveManualShoppingItem(updated);
+      setEditingId(null);
+      return;
+    }
+
     void persist(
       items.map((item) =>
         item.id === id
@@ -179,23 +240,13 @@ export default function ShoppingPage() {
     setEditingId(null);
   }
 
-  function addExtraItem() {
+  function addManualItem() {
     if (!newItem.name.trim()) return;
 
-    const item: ShoppingListItem = {
-      id: uuidv4(),
-      name: newItem.name.trim(),
-      quantity: newItem.quantity,
-      unit: newItem.unit,
-      section: "Other",
-      recipeIds: [],
-      recipeNames: [],
-      checked: false,
-    };
-
-    void persist([...items, item]);
+    const item = makeManualItem(newItem.name, newItem.quantity, newItem.unit);
+    setManualItems((prev) => [...prev, item]);
     setNewItem({ name: "", quantity: "", unit: "" });
-    setAddingExtraItem(false);
+    void saveManualShoppingItem(item);
   }
 
   function toggleSection(section: string) {
@@ -208,8 +259,9 @@ export default function ShoppingPage() {
     setCollapsedSections(next);
   }
 
+  // Only the recipe items — manual items are cleared by checking them off.
   function clearAll() {
-    if (!confirm("Clear all shopping items?")) return;
+    if (!confirm("Clear all recipe ingredients from the shopping list?")) return;
     void persist([]);
   }
 
@@ -308,16 +360,14 @@ export default function ShoppingPage() {
     });
   }, [itemSearchQuery, items, recentViewsByRecipeId, recipesById, sortOption]);
 
-  const recipeVisibleItems = visibleItems.filter((item) => item.recipeIds.length > 0);
-  const extraVisibleItems = visibleItems.filter((item) => item.recipeIds.length === 0);
-  const grouped = groupBySection(recipeVisibleItems);
+  const grouped = groupBySection(visibleItems);
   const checkedCount = items.filter((item) => item.checked).length;
   const totalCount = items.length;
   const visibleCount = visibleItems.length;
   const activeSections = GROCERY_SECTIONS.filter((section) => grouped[section].length > 0);
-  const extraCheckedCount = extraVisibleItems.filter((item) => item.checked).length;
 
   function renderItemRow(item: ShoppingListItem) {
+    const manual = isManualShoppingItem(item);
     return (
       <li
         key={item.id}
@@ -326,7 +376,7 @@ export default function ShoppingPage() {
         }`}
       >
         <button
-          onClick={() => toggleCheck(item.id)}
+          onClick={() => (manual ? removeManualItem(item.id) : toggleCheck(item.id))}
           className={`shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
             item.checked
               ? "bg-brand-500 border-brand-500"
@@ -419,7 +469,7 @@ export default function ShoppingPage() {
               <Edit2 size={14} />
             </button>
             <button
-              onClick={() => removeItem(item.id)}
+              onClick={() => (manual ? removeManualItem(item.id) : removeItem(item.id))}
               className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
             >
               <Trash2 size={14} />
@@ -427,6 +477,79 @@ export default function ShoppingPage() {
           </div>
         )}
       </li>
+    );
+  }
+
+  function renderManualTab() {
+    const inputClass =
+      "min-w-0 text-sm px-3 h-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white";
+
+    return (
+      <div className="space-y-4">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            addManualItem();
+          }}
+          className="bg-white rounded-xl border border-gray-200 p-4 space-y-3"
+        >
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">Add an item</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              For things you need that aren&apos;t from a recipe. These stay put
+              when you change or clear recipes, and disappear once you check them
+              off.
+            </p>
+          </div>
+          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_6rem_auto]">
+            <input
+              className={`${inputClass} col-span-2 sm:col-span-1`}
+              value={newItem.name}
+              onChange={(event) => setNewItem({ ...newItem, name: event.target.value })}
+              placeholder="Item name"
+              aria-label="Item name"
+            />
+            <input
+              className={inputClass}
+              value={newItem.quantity}
+              onChange={(event) => setNewItem({ ...newItem, quantity: event.target.value })}
+              placeholder="Qty"
+              aria-label="Quantity"
+            />
+            <input
+              className={inputClass}
+              value={newItem.unit}
+              onChange={(event) => setNewItem({ ...newItem, unit: event.target.value })}
+              placeholder="Unit"
+              aria-label="Unit"
+            />
+            <button
+              type="submit"
+              disabled={!newItem.name.trim()}
+              className="col-span-2 sm:col-span-1 inline-flex items-center justify-center gap-1.5 h-10 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50 transition-colors"
+            >
+              <Plus size={15} />
+              Add
+            </button>
+          </div>
+        </form>
+
+        {manualItems.length === 0 ? (
+          <div className="text-center py-10">
+            <ShoppingCart size={40} className="mx-auto text-gray-300 mb-3" />
+            <h2 className="text-base font-semibold text-gray-500">Nothing added</h2>
+            <p className="text-sm text-gray-400 mt-1">
+              Add staples like salt or paper towels above.
+            </p>
+          </div>
+        ) : (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <ul className="divide-y divide-gray-50">
+              {manualItems.map((item) => renderItemRow(item))}
+            </ul>
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -440,13 +563,21 @@ export default function ShoppingPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Shopping List</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            {selectedRecipes.length} recipe{selectedRecipes.length === 1 ? "" : "s"} selected
-            {` · ${checkedCount}/${totalCount} items checked`}
-            {items.length > 0 ? ` · showing ${visibleCount}` : ""}
+            {activeTab === "recipes" ? (
+              <>
+                {selectedRecipes.length} recipe{selectedRecipes.length === 1 ? "" : "s"} selected
+                {` · ${checkedCount}/${totalCount} items checked`}
+                {items.length > 0 ? ` · showing ${visibleCount}` : ""}
+              </>
+            ) : (
+              <>
+                {manualItems.length} item{manualItems.length === 1 ? "" : "s"} to buy
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {totalCount > 0 && (
+          {activeTab === "recipes" && totalCount > 0 && (
             <button
               onClick={clearAll}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
@@ -458,6 +589,52 @@ export default function ShoppingPage() {
         </div>
       </div>
 
+      <div
+        role="tablist"
+        aria-label="Shopping list"
+        className="grid grid-cols-2 gap-1 rounded-xl bg-gray-100 p-1"
+      >
+        {(
+          [
+            { id: "recipes", label: "From recipes", count: totalCount - checkedCount },
+            { id: "manual", label: "Added by me", count: manualItems.length },
+          ] as const
+        ).map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            onClick={() => {
+              setActiveTab(tab.id);
+              setEditingId(null);
+            }}
+            className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              activeTab === tab.id
+                ? "bg-white text-gray-900 shadow-sm"
+                : "text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            {tab.label}
+            {tab.count > 0 && (
+              <span
+                className={`text-xs px-2 py-0.5 rounded-full ${
+                  activeTab === tab.id
+                    ? "bg-brand-50 text-brand-700"
+                    : "bg-gray-200 text-gray-500"
+                }`}
+              >
+                {tab.count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "manual" ? (
+        renderManualTab()
+      ) : (
+      <>
       <section className="bg-white rounded-xl border border-gray-200 p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -605,7 +782,7 @@ export default function ShoppingPage() {
           <ShoppingCart size={40} className="mx-auto text-gray-300 mb-3" />
           <h2 className="text-base font-semibold text-gray-500">No shopping list yet</h2>
           <p className="text-sm text-gray-400 mt-1">
-            Select recipes above, or add a one-off item in Extra Items below.
+            Select recipes above to build your list.
           </p>
         </div>
       )}
@@ -695,113 +872,9 @@ export default function ShoppingPage() {
             );
           })}
 
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <button
-              className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
-              onClick={() => toggleSection(EXTRA_ITEMS_SECTION)}
-            >
-              <div className="flex items-center gap-2">
-                {collapsedSections.has(EXTRA_ITEMS_SECTION) ? (
-                  <ChevronRight size={16} className="text-gray-400" />
-                ) : (
-                  <ChevronDown size={16} className="text-gray-400" />
-                )}
-                <span className="font-semibold text-gray-800 text-sm">
-                  {EXTRA_ITEMS_SECTION}
-                </span>
-                <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
-                  {extraVisibleItems.length}
-                </span>
-              </div>
-              {extraCheckedCount > 0 && (
-                <span className="text-xs text-brand-600 font-medium">
-                  {extraCheckedCount}/{extraVisibleItems.length}
-                </span>
-              )}
-            </button>
-
-            {!collapsedSections.has(EXTRA_ITEMS_SECTION) && (
-              <>
-                {extraVisibleItems.length === 0 && (
-                  <p className="px-4 pt-3 text-sm text-gray-400">
-                    Items you add here aren&apos;t tied to a recipe — handy for
-                    staples like salt that you just need to restock.
-                  </p>
-                )}
-                <ul className="divide-y divide-gray-50">
-                  {extraVisibleItems.map((item) => renderItemRow(item))}
-
-                  {addingExtraItem ? (
-                    <li className="px-4 py-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] gap-2 items-center bg-brand-50 sm:flex">
-                      <input
-                        autoFocus
-                        className="min-w-0 w-full sm:w-16 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                        value={newItem.quantity}
-                        onChange={(event) =>
-                          setNewItem({
-                            ...newItem,
-                            quantity: event.target.value,
-                          })
-                        }
-                        placeholder="Qty"
-                      />
-                      <input
-                        className="min-w-0 w-full sm:w-20 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white"
-                        value={newItem.unit}
-                        onChange={(event) =>
-                          setNewItem({
-                            ...newItem,
-                            unit: event.target.value,
-                          })
-                        }
-                        placeholder="Unit"
-                      />
-                      <input
-                        className="col-span-2 min-w-0 w-full text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500 bg-white sm:flex-1"
-                        value={newItem.name}
-                        onChange={(event) =>
-                          setNewItem({
-                            ...newItem,
-                            name: event.target.value,
-                          })
-                        }
-                        placeholder="Item name"
-                        onKeyDown={(event) =>
-                          event.key === "Enter" && addExtraItem()
-                        }
-                      />
-                      <button
-                        onClick={() => addExtraItem()}
-                        className="text-brand-600 hover:text-brand-700"
-                      >
-                        <Check size={16} />
-                      </button>
-                      <button
-                        onClick={() => setAddingExtraItem(false)}
-                        className="text-gray-400"
-                      >
-                        <X size={16} />
-                      </button>
-                    </li>
-                  ) : (
-                    <li>
-                      <button
-                        onClick={() => {
-                          setAddingExtraItem(true);
-                          setNewItem({ name: "", quantity: "", unit: "" });
-                        }}
-                        className="w-full px-4 py-2 flex items-center gap-2 text-sm text-gray-400 hover:text-brand-600 hover:bg-brand-50 transition-colors"
-                      >
-                        <Plus size={14} />
-                        Add item
-                      </button>
-                    </li>
-                  )}
-                </ul>
-              </>
-            )}
-          </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

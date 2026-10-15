@@ -60,6 +60,20 @@
 			</array>
 		</dict>
 	</dict>
+	<!-- Press-and-hold on the home screen icon. Handled in SceneDelegate. -->
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.clarivore.cookingbeeasy.add-ingredient</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Add Ingredient</string>
+			<key>UIApplicationShortcutItemSubtitle</key>
+			<string>To your shopping list</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>cart.badge.plus</string>
+		</dict>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict>
 		<!-- Just the page background: the app's own loading screen picks up
