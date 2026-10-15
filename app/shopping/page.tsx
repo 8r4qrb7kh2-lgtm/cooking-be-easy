@@ -388,31 +388,9 @@ export default function ShoppingPage() {
         </button>
 
         {editingId === item.id ? (
-          <div className="flex-1 flex gap-2 items-center">
+          <div className="flex-1 min-w-0 flex flex-col gap-2">
             <input
-              className="w-16 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
-              value={editBuf.quantity}
-              onChange={(event) =>
-                setEditBuf({
-                  ...editBuf,
-                  quantity: event.target.value,
-                })
-              }
-              placeholder="Qty"
-            />
-            <input
-              className="w-20 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
-              value={editBuf.unit}
-              onChange={(event) =>
-                setEditBuf({
-                  ...editBuf,
-                  unit: event.target.value,
-                })
-              }
-              placeholder="Unit"
-            />
-            <input
-              className="flex-1 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
+              className="w-full min-w-0 text-base px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
               value={editBuf.name}
               onChange={(event) =>
                 setEditBuf({
@@ -422,18 +400,44 @@ export default function ShoppingPage() {
               }
               placeholder="Name"
             />
-            <button
-              onClick={() => saveEdit(item.id)}
-              className="text-brand-600 hover:text-brand-700"
-            >
-              <Check size={16} />
-            </button>
-            <button
-              onClick={() => setEditingId(null)}
-              className="text-gray-400 hover:text-gray-600"
-            >
-              <X size={16} />
-            </button>
+            <div className="flex gap-2 items-center">
+              <input
+                className="w-16 min-w-0 text-base px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
+                value={editBuf.quantity}
+                onChange={(event) =>
+                  setEditBuf({
+                    ...editBuf,
+                    quantity: event.target.value,
+                  })
+                }
+                placeholder="Qty"
+              />
+              <input
+                className="flex-1 min-w-0 text-base px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-brand-500"
+                value={editBuf.unit}
+                onChange={(event) =>
+                  setEditBuf({
+                    ...editBuf,
+                    unit: event.target.value,
+                  })
+                }
+                placeholder="Unit"
+              />
+              <button
+                onClick={() => saveEdit(item.id)}
+                className="shrink-0 p-1.5 text-brand-600 hover:text-brand-700"
+                aria-label="Save"
+              >
+                <Check size={18} />
+              </button>
+              <button
+                onClick={() => setEditingId(null)}
+                className="shrink-0 p-1.5 text-gray-400 hover:text-gray-600"
+                aria-label="Cancel"
+              >
+                <X size={18} />
+              </button>
+            </div>
           </div>
         ) : (
           <div className={`flex-1 min-w-0 ${item.checked ? "opacity-50" : ""}`}>
