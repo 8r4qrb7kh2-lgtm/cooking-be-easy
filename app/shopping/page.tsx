@@ -37,14 +37,64 @@ import {
 
 type ShoppingTab = "recipes" | "manual";
 
-// One ingredient line from one selected recipe, as sent to Claude.
+// One line sent to Claude: either an ingredient from a selected recipe, or
+// an item already on the list whose duplicates were resolved earlier.
 interface RecipeEntry {
   name: string;
   quantity: string;
   unit: string;
   section: string;
-  recipeId: string;
-  recipeName: string;
+  recipeIds: string[];
+  recipeNames: string[];
+  existingItem?: ShoppingListItem;
+}
+
+function recipeEntries(recipe: Recipe): RecipeEntry[] {
+  return recipe.ingredients
+    .filter((ingredient) => ingredient.name.trim())
+    .map((ingredient) => ({
+      name: ingredient.name.trim(),
+      quantity: ingredient.quantity ?? "",
+      unit: ingredient.unit ?? "",
+      section: ingredient.section,
+      recipeIds: [recipe.id],
+      recipeNames: [recipe.name],
+    }));
+}
+
+// Splits the current list into items that can stay as they are and the
+// recipes whose ingredients have to be combined again. Items from removed
+// recipes are dropped. An item that also included a removed recipe has the
+// wrong amount, so every item sharing a recipe with it is rebuilt too.
+function planRegeneration(items: ShoppingListItem[], selectedIds: string[]) {
+  const selected = new Set(selectedIds);
+  const current = items.filter((item) => item.recipeIds.some((id) => selected.has(id)));
+
+  const rebuild = new Set<string>();
+  for (const item of current) {
+    if (item.recipeIds.some((id) => !selected.has(id))) {
+      item.recipeIds.forEach((id) => selected.has(id) && rebuild.add(id));
+    }
+  }
+  let grew = rebuild.size > 0;
+  while (grew) {
+    grew = false;
+    for (const item of current) {
+      if (!item.recipeIds.some((id) => rebuild.has(id))) continue;
+      for (const id of item.recipeIds) {
+        if (selected.has(id) && !rebuild.has(id)) {
+          rebuild.add(id);
+          grew = true;
+        }
+      }
+    }
+  }
+
+  const keptItems = current.filter((item) => !item.recipeIds.some((id) => rebuild.has(id)));
+  const coveredIds = new Set(keptItems.flatMap((item) => item.recipeIds));
+  const rawRecipeIds = selectedIds.filter((id) => rebuild.has(id) || !coveredIds.has(id));
+
+  return { keptItems, rawRecipeIds };
 }
 
 // A "Generate list" run waiting on the user to confirm each combined item.
@@ -226,18 +276,37 @@ export default function ShoppingPage() {
   async function generateList() {
     if (generating || selectedRecipes.length === 0) return;
 
-    const entries: RecipeEntry[] = selectedRecipes.flatMap((recipe) =>
-      recipe.ingredients
-        .filter((ingredient) => ingredient.name.trim())
-        .map((ingredient) => ({
-          name: ingredient.name.trim(),
-          quantity: ingredient.quantity ?? "",
-          unit: ingredient.unit ?? "",
-          section: ingredient.section,
-          recipeId: recipe.id,
-          recipeName: recipe.name,
-        }))
+    // Keep what's already on the list and only combine the new recipes'
+    // ingredients into it, so earlier duplicate reviews aren't repeated.
+    // With nothing new to add, tapping Generate rebuilds from scratch.
+    const plan = planRegeneration(
+      items,
+      selectedRecipes.map((recipe) => recipe.id)
     );
+    // Only recipes were removed, and no remaining item needs a new amount.
+    if (plan.rawRecipeIds.length === 0 && plan.keptItems.length < items.length) {
+      setEditingId(null);
+      await persist(plan.keptItems);
+      return;
+    }
+    const incremental = plan.keptItems.length > 0 && plan.rawRecipeIds.length > 0;
+    const rawRecipes = incremental
+      ? selectedRecipes.filter((recipe) => plan.rawRecipeIds.includes(recipe.id))
+      : selectedRecipes;
+    const entries: RecipeEntry[] = [
+      ...(incremental
+        ? plan.keptItems.map((item) => ({
+            name: item.name,
+            quantity: item.quantity,
+            unit: item.unit,
+            section: item.section,
+            recipeIds: item.recipeIds,
+            recipeNames: item.recipeNames,
+            existingItem: item,
+          }))
+        : []),
+      ...rawRecipes.flatMap(recipeEntries),
+    ];
 
     setGenerating(true);
     setGenerateError(null);
@@ -246,13 +315,16 @@ export default function ShoppingPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          entries: entries.map(({ name, quantity, unit, section, recipeName }) => ({
-            name,
-            quantity,
-            unit,
-            section,
-            recipeName,
-          })),
+          entries: entries.map(
+            ({ name, quantity, unit, section, recipeNames, existingItem }) => ({
+              name,
+              quantity,
+              unit,
+              section,
+              recipeName: recipeNames.join(", "),
+              existing: Boolean(existingItem),
+            })
+          ),
         }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -313,12 +385,18 @@ export default function ShoppingPage() {
 
     const nextList: ShoppingListItem[] = groups.map((group) => {
       const groupEntries = group.entryIndexes.map((index) => entries[index]);
+      // An existing item nothing new was merged into stays exactly as it was.
+      const existingItem = groupEntries[0]?.existingItem;
+      if (groupEntries.length === 1 && existingItem) return existingItem;
+
       const recipeIds: string[] = [];
       const recipeNames: string[] = [];
       for (const entry of groupEntries) {
-        if (recipeIds.includes(entry.recipeId)) continue;
-        recipeIds.push(entry.recipeId);
-        recipeNames.push(entry.recipeName);
+        entry.recipeIds.forEach((recipeId, index) => {
+          if (recipeIds.includes(recipeId)) return;
+          recipeIds.push(recipeId);
+          recipeNames.push(entry.recipeNames[index]);
+        });
       }
       return {
         id: uuidv4(),
@@ -759,7 +837,11 @@ export default function ShoppingPage() {
                 <li key={index} className="px-3 py-2 flex items-baseline justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-sm text-gray-800 truncate">{entry.name}</p>
-                    <p className="text-xs text-gray-400 truncate">{entry.recipeName}</p>
+                    <p className="text-xs text-gray-400 truncate">
+                      {entry.existingItem
+                        ? `Already on your list · ${entry.recipeNames.join(", ")}`
+                        : entry.recipeNames.join(", ")}
+                    </p>
                   </div>
                   <span className="text-sm font-medium text-gray-700 shrink-0">
                     {formatQty(entry.quantity, entry.unit)}

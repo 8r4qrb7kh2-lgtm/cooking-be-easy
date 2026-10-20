@@ -11,6 +11,9 @@ interface EntryInput {
   unit: string;
   section: string;
   recipeName: string;
+  // An item already on the shopping list (duplicates already resolved),
+  // rather than a raw ingredient line from a newly added recipe.
+  existing?: boolean;
 }
 
 export interface CombinedGroup {
@@ -41,6 +44,8 @@ function asSection(value: unknown, fallback: string): GrocerySection {
 // Takes every ingredient line from the selected recipes and asks Claude which
 // lines are the same grocery item, with one combined quantity for each. Every
 // entry index ends up in exactly one group; groups of one are untouched lines.
+// Entries marked existing are items already on the list; they are never
+// grouped with each other, only with new lines that match them.
 export async function POST(request: NextRequest) {
   try {
     const { entries } = await request.json();
@@ -56,9 +61,10 @@ export async function POST(request: NextRequest) {
     const lines = entries
       .map(
         (entry: EntryInput, index: number) =>
-          `${index}. ${[entry.quantity, entry.unit].filter(Boolean).join(" ") || "(no qty)"} | ${entry.name} | recipe: ${entry.recipeName}`
+          `${index}. ${[entry.quantity, entry.unit].filter(Boolean).join(" ") || "(no qty)"} | ${entry.name} | ${entry.existing ? `ALREADY ON LIST (from: ${entry.recipeName})` : `recipe: ${entry.recipeName}`}`
       )
       .join("\n");
+    const hasExisting = entries.some((entry: EntryInput) => entry.existing);
 
     const message = await client.messages.create({
       model: "claude-sonnet-5-5",
@@ -78,7 +84,12 @@ Rules:
 - If quantities can't be meaningfully added (e.g. "to taste", "a pinch", count vs weight with no sensible conversion), give your best practical combined amount in "quantity" and "unit", or express both like "2 + to taste".
 - Use a clean, generic grocery name for combined entries (e.g. "Garlic", "Yellow onion").
 - Every line number from 0 to ${entries.length - 1} must appear in exactly one group. Lines with no duplicate go in their own single-line group with their original name, quantity and unit.
-- section must be one of: ${GROCERY_SECTIONS.join(", ")}.
+- section must be one of: ${GROCERY_SECTIONS.join(", ")}.${
+            hasExisting
+              ? `
+- Lines marked ALREADY ON LIST are finished shopping list entries whose duplicates were already combined. Never put two ALREADY ON LIST lines in the same group. A new recipe line may join one ALREADY ON LIST line when it is the same item; the combined quantity is the listed amount plus the new line(s).`
+              : ""
+          }
 
 Return ONLY valid JSON in this exact format:
 {
@@ -114,13 +125,24 @@ Return ONLY valid JSON in this exact format:
 
     for (const group of Array.isArray(parsed.groups) ? parsed.groups : []) {
       if (!group || !Array.isArray(group.lines)) continue;
-      const entryIndexes = group.lines.filter(
-        (value): value is number =>
-          Number.isInteger(value) &&
-          (value as number) >= 0 &&
-          (value as number) < entries.length &&
-          !used.has(value as number)
-      );
+      let seenExisting = false;
+      const entryIndexes = group.lines.filter((value): value is number => {
+        if (
+          !Number.isInteger(value) ||
+          (value as number) < 0 ||
+          (value as number) >= entries.length ||
+          used.has(value as number)
+        ) {
+          return false;
+        }
+        // Keep at most one existing item per group; any others fall
+        // through to their own group below, unchanged.
+        if ((entries[value as number] as EntryInput).existing) {
+          if (seenExisting) return false;
+          seenExisting = true;
+        }
+        return true;
+      });
       if (entryIndexes.length === 0) continue;
       entryIndexes.forEach((index) => used.add(index));
 
