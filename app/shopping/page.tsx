@@ -143,6 +143,9 @@ export default function ShoppingPage() {
   const [recipePickerOpen, setRecipePickerOpen] = useState(false);
   const [recipePickerQuery, setRecipePickerQuery] = useState("");
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  // Fully checked-off sections start collapsed; this holds the ones the user
+  // opened anyway. It isn't saved, so they're collapsed again on every visit.
+  const [openedDoneSections, setOpenedDoneSections] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBuf, setEditBuf] = useState({ quantity: "", unit: "", name: "" });
   const [newItem, setNewItem] = useState({ name: "", quantity: "", unit: "" });
@@ -417,9 +420,25 @@ export default function ShoppingPage() {
   }
 
   function toggleCheck(id: string) {
-    void persist(
-      items.map((item) => (item.id === id ? { ...item, checked: !item.checked } : item))
+    const next = items.map((item) =>
+      item.id === id ? { ...item, checked: !item.checked } : item
     );
+    // Checking off the last item in a section collapses it, even if it was
+    // opened earlier while already complete.
+    const toggled = next.find((item) => item.id === id);
+    if (toggled?.checked) {
+      const section = Object.entries(groupBySection(next)).find(([, sectionItems]) =>
+        sectionItems.some((item) => item.id === id)
+      );
+      if (section?.[1].every((item) => item.checked)) {
+        setOpenedDoneSections((prev) => {
+          const updated = new Set(prev);
+          updated.delete(section[0]);
+          return updated;
+        });
+      }
+    }
+    void persist(next);
   }
 
   function removeItem(id: string) {
@@ -478,6 +497,17 @@ export default function ShoppingPage() {
   }
 
   function toggleSection(section: string) {
+    if (doneSections.has(section)) {
+      const next = new Set(openedDoneSections);
+      if (next.has(section)) {
+        next.delete(section);
+      } else {
+        next.add(section);
+      }
+      setOpenedDoneSections(next);
+      return;
+    }
+
     const next = new Set(collapsedSections);
     if (next.has(section)) {
       next.delete(section);
@@ -602,6 +632,14 @@ export default function ShoppingPage() {
   const totalCount = items.length;
   const visibleCount = visibleItems.length;
   const activeSections = GROCERY_SECTIONS.filter((section) => grouped[section].length > 0);
+  // Judged on the whole list, not just the items matching the search.
+  const allGrouped = groupBySection(items);
+  const doneSections = new Set<string>(
+    GROCERY_SECTIONS.filter(
+      (section) =>
+        allGrouped[section].length > 0 && allGrouped[section].every((item) => item.checked)
+    )
+  );
 
   function renderItemRow(item: ShoppingListItem) {
     const manual = isManualShoppingItem(item);
@@ -1238,7 +1276,9 @@ export default function ShoppingPage() {
         <div className="space-y-4">
           {activeSections.map((section) => {
             const sectionItems = grouped[section];
-            const collapsed = collapsedSections.has(section);
+            const collapsed = doneSections.has(section)
+              ? !openedDoneSections.has(section)
+              : collapsedSections.has(section);
             const sectionChecked = sectionItems.filter((item) => item.checked).length;
 
             return (
