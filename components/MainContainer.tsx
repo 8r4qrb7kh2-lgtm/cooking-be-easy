@@ -15,7 +15,7 @@ export default function MainContainer({
 
   return (
     <main
-      className={`mx-auto px-4 py-6 pb-[calc(6rem_+_env(safe-area-inset-bottom))] ${
+      className={`mx-auto px-safe-4 py-6 short:pt-4 pb-[calc(6rem_+_env(safe-area-inset-bottom))] ${
         fullWidth ? "max-w-none" : "max-w-4xl"
       }`}
     >

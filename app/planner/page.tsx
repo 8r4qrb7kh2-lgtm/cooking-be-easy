@@ -1647,7 +1647,7 @@ export default function PlannerPage() {
         <div>
           <div className="flex items-stretch gap-1.5">
             {/* Y-axis tick labels */}
-            <div className="relative w-9 shrink-0 h-[460px] sm:h-[620px]">
+            <div className="relative w-9 shrink-0 h-[min(460px,65dvh)] sm:h-[min(620px,75dvh)]">
               {yAxis.ticks.map((tick) => (
                 <span
                   key={`y-${tick.fraction}-${tick.label}`}
@@ -1668,7 +1668,7 @@ export default function PlannerPage() {
             </div>
 
             {/* Plot area */}
-            <div className="relative flex-1 h-[460px] sm:h-[620px] rounded-lg border border-gray-200 bg-gray-50/60 overflow-hidden">
+            <div className="relative flex-1 h-[min(460px,65dvh)] sm:h-[min(620px,75dvh)] rounded-lg border border-gray-200 bg-gray-50/60 overflow-hidden">
               {/* Gridlines */}
               {xAxis.ticks.map((tick) => (
                 <div

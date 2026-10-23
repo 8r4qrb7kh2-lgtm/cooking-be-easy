@@ -845,7 +845,7 @@ export default function ShoppingPage() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="combine-review-title"
-          className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl max-h-[80vh] overflow-y-auto"
+          className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl max-h-[80dvh] overflow-y-auto"
         >
           <div className="flex items-start justify-between gap-3">
             <div>

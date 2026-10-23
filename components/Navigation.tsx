@@ -25,9 +25,12 @@ export default function Navigation() {
     <>
       {/* Top header — scrolls away with the page (stays static) so pages like the
           planner can pin their own compact header at the very top instead. */}
-      <header className="surface border-b surface-border pt-[env(safe-area-inset-top)]">
-        <div className="max-w-4xl mx-auto px-4 h-28 sm:h-32 flex items-center gap-2 sm:gap-3 min-w-0">
-          <GooseChefLogo variant="header" size={176} />
+      <header className="surface border-b surface-border pt-[env(safe-area-inset-top)] px-safe">
+        <div className="max-w-4xl mx-auto px-4 h-28 sm:h-32 short:h-16 flex items-center gap-2 sm:gap-3 min-w-0">
+          {/* On short screens (iPhone Duo folded, landscape) a smaller logo keeps
+              the header from eating a quarter of the viewport. */}
+          <GooseChefLogo variant="header" size={176} className="short:hidden" />
+          <GooseChefLogo variant="header" size={96} className="hidden short:block" />
           <div className="flex-1" />
           {user && (
             <>
@@ -63,7 +66,7 @@ export default function Navigation() {
 
       {/* Bottom tab bar. The padding keeps the tabs clear of the iPhone home
           indicator; env() is 0 in a normal browser window. */}
-      <nav className="fixed bottom-0 left-0 right-0 surface border-t surface-border z-50 pb-[env(safe-area-inset-bottom)]">
+      <nav className="fixed bottom-0 left-0 right-0 surface border-t surface-border z-50 pb-[env(safe-area-inset-bottom)] px-safe">
         <div className="max-w-4xl mx-auto flex">
           {navItems.map(({ href, label, icon: Icon }) => {
             const active = pathname === href || pathname.startsWith(href + "/");
@@ -71,7 +74,7 @@ export default function Navigation() {
               <Link
                 key={href}
                 href={href}
-                className={`relative flex-1 flex flex-col items-center justify-center py-2 gap-1 transition-colors ${
+                className={`relative flex-1 flex flex-col items-center justify-center py-2 gap-1 short:flex-row short:gap-1.5 transition-colors ${
                   active
                     ? "text-brand-600"
                     : "text-gray-400 hover:text-gray-600"
